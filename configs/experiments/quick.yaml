@@ -1,0 +1,29 @@
+# Quick experiment: 2 families, no ESM — runs in under a minute.
+pfam:
+  version: "35.0"
+  families:
+    - PF00069
+    - PF00072
+
+data:
+  cache_dir: data/raw
+  min_seq_length: 50
+
+results_dir: results
+cache_embeddings: true
+save_figures: true
+
+embedders:
+  - name: composition
+  - name: kmer
+    k: 3
+
+reducer:
+  name: umap
+  n_neighbors: 10
+  min_dist: 0.1
+  metric: cosine
+
+evaluation:
+  n_neighbors_trust: 10
+  n_neighbors_knn: 5

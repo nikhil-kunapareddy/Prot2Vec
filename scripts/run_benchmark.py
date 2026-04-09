@@ -7,6 +7,13 @@ from pathlib import Path
 
 import yaml
 
+# Load API keys from .env if present (no-op if file doesn't exist or dotenv not installed)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from prot2vec.data.dataset import ProteinDataset
 from prot2vec.data.pfam import download_pfam_seed, parse_pfam_families
 from prot2vec.embedders.base import SequenceEmbedder
@@ -33,6 +40,16 @@ def _build_embedder(cfg: dict) -> SequenceEmbedder:
         return ESMEmbedder(
             model_key=cfg.get("model_key", "esm2_t12_35M"),
             batch_size=cfg.get("batch_size", 16),
+            max_len=cfg.get("max_len", 512),
+        )
+    if name == "llm":
+        from prot2vec.embedders.llm import LLMEmbedder
+
+        return LLMEmbedder(
+            provider=cfg.get("provider", "google"),
+            model=cfg.get("model", None),
+            batch_size=cfg.get("batch_size", 64),
+            api_key_env=cfg.get("api_key_env", None),
             max_len=cfg.get("max_len", 512),
         )
     raise ValueError(f"Unknown embedder: {name!r}")

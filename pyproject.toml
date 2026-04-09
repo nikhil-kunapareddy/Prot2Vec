@@ -25,6 +25,10 @@ esm = [
     "torch>=2.0",
     "fair-esm>=2.0",
 ]
+llm = [
+    "google-genai>=1.0",
+    "python-dotenv>=1.0",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov",

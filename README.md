@@ -1,6 +1,6 @@
 # Prot2Vec
 
-A benchmarking toolkit for protein sequence vectorization techniques. Compares embedding methods — amino acid composition, k-mer TF-IDF, and transformer-based language models (ESM-2) — on their ability to capture structural and functional similarity across Pfam protein families.
+A benchmarking toolkit for protein sequence vectorization techniques. Compares embedding methods — amino acid composition, k-mer TF-IDF, transformer-based protein language models (ESM-2), and general-purpose LLM embedders (Google Gemini) — on their ability to capture structural and functional similarity across Pfam protein families.
 
 ## Overview
 
@@ -16,6 +16,7 @@ Proteins are fundamental to biological systems, but representing them in a way t
 | Amino acid composition | Frequency vector | 20-d |
 | k-mer TF-IDF (`k=3`) | Sparse bag-of-ngrams | ~8000-d |
 | ESM-2 (35M parameters) | Protein language model | 480-d |
+| Google Gemini (`gemini-embedding-001`) | General-purpose LLM | 768-d |
 
 Dimensionality reduction is applied via **PCA**, **UMAP**, or **t-SNE** before evaluation and visualization.
 
@@ -25,7 +26,7 @@ Dimensionality reduction is applied via **PCA**, **UMAP**, or **t-SNE** before e
 prot2vec/
 ├── prot2vec/               # Core package
 │   ├── data/               # Pfam download + parsing, ProteinDataset
-│   ├── embedders/          # Composition, k-mer, ESM-2 embedders
+│   ├── embedders/          # Composition, k-mer, ESM-2, LLM embedders
 │   ├── reduction/          # PCA, UMAP, t-SNE wrappers
 │   ├── evaluation/         # Trustworthiness + kNN accuracy metrics
 │   ├── visualization/      # Scatter plots + metric bar charts
@@ -34,14 +35,12 @@ prot2vec/
 │   ├── default.yaml
 │   └── experiments/
 │       ├── quick.yaml      # 2 families, no ESM (fast iteration)
-│       └── full.yaml       # 5 families, all three embedders
+│       ├── full.yaml       # 5 families, all embedders
+│       └── llm.yaml        # Google Gemini LLM embedder benchmark
 ├── scripts/
 │   ├── download_data.py    # Pre-fetch Pfam seed alignment
 │   └── run_benchmark.py    # CLI entry point
 ├── notebooks/
-│   ├── 01_eda.ipynb
-│   ├── 02_method_comparison.ipynb
-│   └── 03_esm_embeddings.ipynb
 └── tests/
 ```
 
@@ -61,6 +60,12 @@ pip install -e ".[dev]"
 
 # With ESM-2 support (requires PyTorch)
 pip install -e ".[esm,dev]"
+
+# With LLM embedder support (Google Gemini)
+pip install -e ".[llm,dev]"
+
+# Or install all dependencies at once
+pip install -r requirements.txt
 ```
 
 ## Quick Start
@@ -76,6 +81,9 @@ python scripts/run_benchmark.py --config configs/experiments/quick.yaml
 
 # Full benchmark: all embedders on 5 families
 python scripts/run_benchmark.py --config configs/experiments/full.yaml
+
+# LLM benchmark: Google Gemini vs. protein-specific methods
+python scripts/run_benchmark.py --config configs/experiments/llm.yaml
 ```
 
 Results are written to `results/metrics/benchmark.csv` and figures to `results/figures/`.
@@ -87,6 +95,7 @@ from prot2vec.data.pfam import download_pfam_seed, parse_pfam_families
 from prot2vec.data.dataset import ProteinDataset
 from prot2vec.embedders.composition import CompositionEmbedder
 from prot2vec.embedders.kmer import KmerEmbedder
+from prot2vec.embedders.llm import LLMEmbedder
 from prot2vec.reduction.reducers import UMAPReducer
 from prot2vec.pipeline import RunConfig, run
 
@@ -96,7 +105,11 @@ dataset = ProteinDataset.from_pfam_records(records)
 
 config = RunConfig(
     dataset=dataset,
-    embedders=[CompositionEmbedder(), KmerEmbedder(k=3)],
+    embedders=[
+        CompositionEmbedder(),
+        KmerEmbedder(k=3),
+        LLMEmbedder(provider="google"),
+    ],
     reducer=UMAPReducer(n_neighbors=15, metric="cosine"),
 )
 results = run(config)
@@ -124,6 +137,11 @@ embedders:
     model_key: esm2_t12_35M   # esm2_t6_8M | esm2_t12_35M | esm2_t30_150M
     batch_size: 16
     max_len: 512
+  - name: llm
+    provider: google            # currently supported: google
+    model: gemini-embedding-001
+    batch_size: 64
+    max_len: 512
 
 reducer:
   name: umap                  # pca | umap | tsne
@@ -135,6 +153,20 @@ results_dir: results
 cache_embeddings: true        # skip re-embedding if .npy cache exists
 save_figures: true
 ```
+
+## LLM Embedder Setup
+
+The LLM embedder sends protein sequences as plain text to a general-purpose embedding API, benchmarking whether non-biological models can incidentally capture protein family structure.
+
+**Google Gemini** (`gemini-embedding-001`, 768-d):
+- Get a free API key at [aistudio.google.com](https://aistudio.google.com) (1,500 requests/day free)
+- Add to a `.env` file in the project root:
+
+```
+GOOGLE_API_KEY=your_key_here
+```
+
+API keys are loaded automatically from `.env` at runtime.
 
 ## Running Tests
 
@@ -157,6 +189,7 @@ ESM-2 inference auto-detects the best available device:
 - [x] Amino acid composition baseline
 - [x] k-mer TF-IDF embeddings
 - [x] ESM-2 protein language model
+- [x] General-purpose LLM embedder (Google Gemini)
 - [ ] ProtTrans / Ankh embedder support
 - [ ] Silhouette score metric
 - [ ] Benchmark on full Pfam database

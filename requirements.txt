@@ -18,3 +18,7 @@ ipykernel
 # ESM-2 embedder (optional — requires ~2 GB for PyTorch)
 # torch>=2.0
 # fair-esm>=2.0
+
+# LLM embedders (Google + Meta)
+google-genai>=1.0
+python-dotenv>=1.0

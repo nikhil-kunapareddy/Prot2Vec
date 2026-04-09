@@ -1,0 +1,37 @@
+# LLM embedder benchmark: Google Gemini vs. protein-specific methods.
+# Requires: pip install "prot2vec[llm]"
+# Keys are loaded automatically from .env:
+#   GOOGLE_API_KEY=...
+pfam:
+  version: "35.0"
+  families:
+    - PF00069   # Protein kinase
+    - PF00072   # GPCR
+
+data:
+  cache_dir: data/raw
+  min_seq_length: 50
+
+results_dir: results
+cache_embeddings: true
+save_figures: true
+
+embedders:
+  - name: composition
+  - name: kmer
+    k: 3
+  - name: llm
+    provider: google
+    model: gemini-embedding-001
+    batch_size: 64
+    max_len: 512
+
+reducer:
+  name: umap
+  n_neighbors: 15
+  min_dist: 0.1
+  metric: cosine
+
+evaluation:
+  n_neighbors_trust: 10
+  n_neighbors_knn: 5

@@ -41,3 +41,7 @@ class ProteinDataset:
     @property
     def families(self) -> list[str]:
         return sorted(set(self.labels))
+
+    @property
+    def family_counts(self) -> dict[str, int]:
+        return {f: self.labels.count(f) for f in self.families}

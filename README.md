@@ -1,5 +1,15 @@
 # Prot2Vec
 
+```
+╭─────────────────────────────────────────────╮
+│                                             │
+│         PROT2VEC                            │
+│         Protein Sequence Embedding          │
+│         Benchmark  ·  v0.1.0               │
+│                                             │
+╰─────────────────────────────────────────────╯
+```
+
 A benchmarking toolkit for protein sequence vectorization techniques. Compares embedding methods — amino acid composition, k-mer TF-IDF, transformer-based protein language models (ESM-2), and general-purpose LLM embedders (Google Gemini) — on their ability to capture structural and functional similarity across Pfam protein families.
 
 ## Overview
@@ -84,6 +94,46 @@ python scripts/run_benchmark.py --config configs/experiments/full.yaml
 
 # LLM benchmark: Google Gemini vs. protein-specific methods
 python scripts/run_benchmark.py --config configs/experiments/llm.yaml
+```
+
+On launch you will see a live CLI UI:
+
+```
+ ╭──────────────────────────────────────╮
+ │                                      │
+ │      PROT2VEC                        │
+ │      Protein Sequence Embedding      │
+ │      Benchmark  ·  v0.1.0           │
+ │                                      │
+ ╰──────────────────────────────────────╯
+
+ ──────────────── Experiment Configuration ────────────────
+
+   Pfam version   35.0
+   Families       PF00069   PF00072
+   Sequences      90 total
+                    PF00069  →  38 sequences
+                    PF00072  →  52 sequences
+   Embedders      composition   kmer   llm
+   Reducer        umap
+   Output         results
+
+ ⠸ Embedding  llm_google_gemini-embedding-001  ━━━━━━━╺━━━━  5/9  0:00:12
+
+ ──────────────────── Benchmark Results ───────────────────
+
+ ╭─────────────────────────────────────────────────────────╮
+ │ Method                  │ Trustworthiness │ kNN Accuracy │
+ ├─────────────────────────┼─────────────────┼──────────────┤
+ │ composition+umap        │    0.8980       │ 0.9444 ±0.05 │
+ │ kmer_k3+umap            │    0.7986       │ 1.0000 ±0.00 │
+ │ llm_google_gemini+umap  │    0.8426       │ 0.5667 ±0.10 │
+ ╰─────────────────────────┴─────────────────┴──────────────╯
+
+ ──────────────────────────────────────────────────────────
+   Completed in    14.3s
+   Metrics saved   results/metrics/benchmark.csv
+   Figures saved   results/figures/
 ```
 
 Results are written to `results/metrics/benchmark.csv` and figures to `results/figures/`.
@@ -190,6 +240,7 @@ ESM-2 inference auto-detects the best available device:
 - [x] k-mer TF-IDF embeddings
 - [x] ESM-2 protein language model
 - [x] General-purpose LLM embedder (Google Gemini)
+- [x] Rich CLI UI with banner, progress bars, and results table
 - [ ] ProtTrans / Ankh embedder support
 - [ ] Silhouette score metric
 - [ ] Benchmark on full Pfam database

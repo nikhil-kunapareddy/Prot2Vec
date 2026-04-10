@@ -5,6 +5,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ class RunConfig:
     results_dir: Path = field(default_factory=lambda: Path("results"))
     cache_embeddings: bool = True
     save_figures: bool = True
+    on_progress: Callable[[str, dict], None] | None = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -66,23 +68,32 @@ def run(config: RunConfig) -> pd.DataFrame:
     """Run the full benchmark. Returns a DataFrame with one row per embedder."""
     records = []
 
+    def _emit(event: str, **kwargs) -> None:
+        if config.on_progress:
+            config.on_progress(event, kwargs)
+
     for embedder in config.embedders:
         cache = (
             _cache_path(config.results_dir, embedder.name, config.dataset)
             if config.cache_embeddings
             else None
         )
+        _emit("embed_start", name=embedder.name, cached=cache and cache.exists())
         X_high = _load_or_compute(embedder, config.dataset, cache)
+        _emit("embed_done", name=embedder.name)
 
         # Keep a dense copy for metrics (trustworthiness needs dense)
         X_high_dense = X_high.toarray() if hasattr(X_high, "toarray") else X_high
 
+        _emit("reduce_start", name=embedder.name, reducer=config.reducer.name)
         logger.info(f"Reducing with {config.reducer.name} ...")
         X_low = config.reducer.fit_transform(X_high)
+        _emit("reduce_done", name=embedder.name)
 
         metrics = evaluate(X_high_dense, X_low, config.dataset.labels)
         row = {"method": f"{embedder.name}+{config.reducer.name}", **metrics}
         records.append(row)
+        _emit("evaluate_done", name=embedder.name, metrics=metrics)
         logger.info(row)
 
         if config.save_figures:

@@ -30,7 +30,3 @@ reducer:
   n_neighbors: 15
   min_dist: 0.1
   metric: cosine
-
-evaluation:
-  n_neighbors_trust: 10
-  n_neighbors_knn: 5

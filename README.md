@@ -33,23 +33,21 @@ Dimensionality reduction is applied via **PCA**, **UMAP**, or **t-SNE** before e
 ## Repository Structure
 
 ```
-prot2vec/
-├── prot2vec/               # Core package
-│   ├── data/               # Pfam download + parsing, ProteinDataset
-│   ├── embedders/          # Composition, k-mer, ESM-2, LLM embedders
-│   ├── reduction/          # PCA, UMAP, t-SNE wrappers
-│   ├── evaluation/         # Trustworthiness + kNN accuracy metrics
-│   ├── visualization/      # Scatter plots + metric bar charts
-│   └── pipeline.py         # Orchestrates embed → reduce → evaluate
-├── configs/                # YAML experiment configs
+prot2vec/                    # repo root
+├── src/                     # Core package — `import src`
+│   ├── data/                # Pfam download + parsing, ProteinDataset
+│   ├── embedders/           # Composition, k-mer, ESM-2, LLM embedders
+│   ├── reduction/           # PCA, UMAP, t-SNE wrappers
+│   ├── evaluation/          # Trustworthiness + kNN accuracy metrics
+│   ├── visualization/       # Scatter plots + metric bar charts
+│   ├── pipeline.py          # Orchestrates embed → reduce → evaluate
+│   └── cli.py               # Console entry points (benchmark + download)
+├── configs/                 # YAML experiment configs
 │   ├── default.yaml
 │   └── experiments/
-│       ├── quick.yaml      # 2 families, no ESM (fast iteration)
-│       ├── full.yaml       # 5 families, all embedders
-│       └── llm.yaml        # Google Gemini LLM embedder benchmark
-├── scripts/
-│   ├── download_data.py    # Pre-fetch Pfam seed alignment
-│   └── run_benchmark.py    # CLI entry point
+│       ├── quick.yaml       # 2 families, no ESM (fast iteration)
+│       ├── full.yaml        # 5 families, all embedders
+│       └── llm.yaml         # Google Gemini LLM embedder benchmark
 ├── notebooks/
 └── tests/
 ```
@@ -84,16 +82,16 @@ pip install -r requirements.txt
 
 ```bash
 # Download Pfam seed alignment (~500 MB, cached after first run)
-python scripts/download_data.py --version 35.0 --cache-dir data/raw
+prot2vec-download --version 35.0 --cache-dir data/raw
 
 # Quick benchmark: composition + k-mer on 2 families (~30 seconds)
-python scripts/run_benchmark.py --config configs/experiments/quick.yaml
+prot2vec-benchmark --config configs/experiments/quick.yaml
 
 # Full benchmark: all embedders on 5 families
-python scripts/run_benchmark.py --config configs/experiments/full.yaml
+prot2vec-benchmark --config configs/experiments/full.yaml
 
 # LLM benchmark: Google Gemini vs. protein-specific methods
-python scripts/run_benchmark.py --config configs/experiments/llm.yaml
+prot2vec-benchmark --config configs/experiments/llm.yaml
 ```
 
 On launch you will see a live CLI UI:
@@ -141,13 +139,13 @@ Results are written to `results/metrics/benchmark.csv` and figures to `results/f
 ### Use as a library
 
 ```python
-from prot2vec.data.pfam import download_pfam_seed, parse_pfam_families
-from prot2vec.data.dataset import ProteinDataset
-from prot2vec.embedders.composition import CompositionEmbedder
-from prot2vec.embedders.kmer import KmerEmbedder
-from prot2vec.embedders.llm import LLMEmbedder
-from prot2vec.reduction.reducers import UMAPReducer
-from prot2vec.pipeline import RunConfig, run
+from src.data.pfam import download_pfam_seed, parse_pfam_families
+from src.data.dataset import ProteinDataset
+from src.embedders.composition import CompositionEmbedder
+from src.embedders.kmer import KmerEmbedder
+from src.embedders.llm import LLMEmbedder
+from src.reduction.reducers import UMAPReducer
+from src.pipeline import RunConfig, run
 
 seed_path = download_pfam_seed(version="35.0", cache_dir="data/raw")
 records = parse_pfam_families(["PF00069", "PF00072"], seed_path)

@@ -1,8 +1,8 @@
 """Tests for embedders."""
 import numpy as np
 
-from prot2vec.embedders.composition import CompositionEmbedder
-from prot2vec.embedders.kmer import KmerEmbedder
+from src.embedders.composition import CompositionEmbedder
+from src.embedders.kmer import KmerEmbedder
 
 SEQS = ["ACDEFGHIKLMNPQRSTVWY", "MKTAYIAKQRQISFVKSHFSRQ", "ACACACACACACACACACAC"]
 

@@ -212,3 +212,6 @@ data/raw/
 
 # prot2vec — placeholder files
 notebooks/
+
+# prot2vec — keep Claude Code project instructions tracked
+!CLAUDE.md

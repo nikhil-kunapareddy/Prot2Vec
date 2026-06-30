@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from prot2vec.evaluation.metrics import compute_trustworthiness, knn_cv_accuracy, evaluate
+from src.evaluation.metrics import compute_trustworthiness, knn_cv_accuracy, evaluate
 
 
 def _make_data(n: int = 40, d_high: int = 10, d_low: int = 2, seed: int = 0):

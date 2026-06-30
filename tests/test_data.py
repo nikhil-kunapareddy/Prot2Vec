@@ -1,7 +1,7 @@
 """Tests for data layer."""
 from unittest.mock import MagicMock
 
-from prot2vec.data.dataset import ProteinDataset, STANDARD_AAS
+from src.data.dataset import ProteinDataset, STANDARD_AAS
 
 
 def _make_mock_record(seq_str: str, rec_id: str = "seq1"):

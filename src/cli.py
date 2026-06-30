@@ -1,4 +1,4 @@
-"""CLI script: run a full embedding benchmark from a YAML config."""
+"""Command-line entry points: benchmark runner and Pfam data downloader."""
 from __future__ import annotations
 
 import argparse
@@ -30,11 +30,11 @@ try:
 except ImportError:
     pass
 
-from prot2vec.data.dataset import ProteinDataset
-from prot2vec.data.pfam import download_pfam_seed, parse_pfam_families
-from prot2vec.embedders.base import SequenceEmbedder
-from prot2vec.pipeline import RunConfig, run
-from prot2vec.reduction.reducers import DimReducer
+from .data.dataset import ProteinDataset
+from .data.pfam import download_pfam_seed, parse_pfam_families
+from .embedders.base import SequenceEmbedder
+from .pipeline import RunConfig, run
+from .reduction.reducers import DimReducer
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -138,20 +138,20 @@ def print_footer(elapsed: float, results_dir: Path) -> None:
 def _build_embedder(cfg: dict) -> SequenceEmbedder:
     name = cfg["name"]
     if name == "composition":
-        from prot2vec.embedders.composition import CompositionEmbedder
+        from .embedders.composition import CompositionEmbedder
         return CompositionEmbedder()
     if name == "kmer":
-        from prot2vec.embedders.kmer import KmerEmbedder
+        from .embedders.kmer import KmerEmbedder
         return KmerEmbedder(k=cfg.get("k", 3))
     if name == "esm2":
-        from prot2vec.embedders.esm import ESMEmbedder
+        from .embedders.esm import ESMEmbedder
         return ESMEmbedder(
             model_key=cfg.get("model_key", "esm2_t12_35M"),
             batch_size=cfg.get("batch_size", 16),
             max_len=cfg.get("max_len", 512),
         )
     if name == "llm":
-        from prot2vec.embedders.llm import LLMEmbedder
+        from .embedders.llm import LLMEmbedder
         return LLMEmbedder(
             provider=cfg.get("provider", "google"),
             model=cfg.get("model", None),
@@ -165,17 +165,17 @@ def _build_embedder(cfg: dict) -> SequenceEmbedder:
 def _build_reducer(cfg: dict) -> DimReducer:
     name = cfg["name"]
     if name == "pca":
-        from prot2vec.reduction.reducers import PCAReducer
+        from .reduction.reducers import PCAReducer
         return PCAReducer(n_components=cfg.get("n_components", 2))
     if name == "umap":
-        from prot2vec.reduction.reducers import UMAPReducer
+        from .reduction.reducers import UMAPReducer
         return UMAPReducer(
             n_neighbors=cfg.get("n_neighbors", 15),
             min_dist=cfg.get("min_dist", 0.1),
             metric=cfg.get("metric", "cosine"),
         )
     if name == "tsne":
-        from prot2vec.reduction.reducers import TSNEReducer
+        from .reduction.reducers import TSNEReducer
         return TSNEReducer(perplexity=cfg.get("perplexity", 30))
     raise ValueError(f"Unknown reducer: {name!r}")
 
@@ -279,6 +279,25 @@ def main() -> None:
 
     print_results_table(results)
     print_footer(elapsed, results_dir)
+
+
+# ---------------------------------------------------------------------------
+# Data download entry point
+# ---------------------------------------------------------------------------
+
+def download() -> None:
+    """Download and cache the Pfam seed alignment (prot2vec-download)."""
+    parser = argparse.ArgumentParser(
+        description="Download Pfam-A.seed.gz from EBI and cache locally."
+    )
+    parser.add_argument("--version", default="35.0", help="Pfam release version (default: 35.0)")
+    parser.add_argument(
+        "--cache-dir", default="data/raw", help="Directory to save the file (default: data/raw)"
+    )
+    args = parser.parse_args()
+
+    path = download_pfam_seed(version=args.version, cache_dir=args.cache_dir)
+    console.print(f"[green]Pfam seed available at:[/green] {path}")
 
 
 if __name__ == "__main__":

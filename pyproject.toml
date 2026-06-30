@@ -38,12 +38,12 @@ dev = [
 ]
 
 [project.scripts]
-prot2vec-benchmark = "scripts.run_benchmark:main"
-prot2vec-download = "scripts.download_data:main"
+prot2vec-benchmark = "src.cli:main"
+prot2vec-download = "src.cli:download"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["prot2vec*"]
+include = ["src*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

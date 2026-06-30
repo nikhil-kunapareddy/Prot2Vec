@@ -1,4 +1,0 @@
-name: esm2
-model_key: esm2_t12_35M
-batch_size: 16
-max_len: 512

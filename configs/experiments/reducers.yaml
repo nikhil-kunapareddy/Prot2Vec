@@ -1,0 +1,35 @@
+# Which projection should you trust?
+#
+# One embedder, three reducers. Because the embedding is computed once and
+# reused, this costs barely more than a single-reducer run — and it shows
+# directly how much of a clustered-looking figure comes from the reducer
+# rather than from the representation. Watch `trustworthiness` alongside
+# `kNN 2-D`: UMAP often wins the picture and loses the honesty.
+pfam:
+  version: "35.0"
+  families:
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
+    - PF00001   # 7tm_1         — 7TM receptor, rhodopsin-family GPCR
+
+data:
+  cache_dir: data/raw
+  min_seq_length: 50
+  max_per_family: 60
+
+results_dir: results
+cache_embeddings: true
+save_figures: true
+
+embedders:
+  - name: kmer
+    k: 3
+
+reducers:
+  - name: pca
+  - name: umap
+    n_neighbors: 15
+    min_dist: 0.1
+    metric: cosine
+  - name: tsne
+    perplexity: 30

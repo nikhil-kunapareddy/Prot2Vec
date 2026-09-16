@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Ruff (lint)
+        run: ruff check src tests conftest.py
+
+      - name: Ruff (format)
+        run: ruff format --check src tests conftest.py
+
+      - name: Mypy
+        run: mypy
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        # The suite needs no network and no model weights: HTTP is mocked and
+        # the Pfam fixture is a synthetic Stockholm archive built in tmp_path.
+        run: pytest --cov=prot2vec --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  smoke:
+    name: End-to-end CLI run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Console scripts are wired up
+        run: |
+          prot2vec-benchmark --version
+          prot2vec-download --help
+
+      - name: Run a full benchmark on synthetic sequences
+        # Exercises the real CLI path -- config parsing, FASTA loading,
+        # embedding, reduction, every metric, exports and the manifest --
+        # without downloading the 500 MB Pfam release.
+        run: |
+          python - <<'PY'
+          import random
+          from pathlib import Path
+
+          rng = random.Random(0)
+          bias = {"FAMA": "AGSTVIL", "FAMB": "DEKRNQH"}
+          lines = []
+          for family, residues in bias.items():
+              for i in range(20):
+                  seq = "".join(rng.choice(residues + "ACDEFGHIKLMNPQRSTVWY") for _ in range(150))
+                  lines.append(f">{family} {family.lower()}_{i:03d}")
+                  lines.append(seq)
+          Path("ci_sequences.fasta").write_text("\n".join(lines) + "\n")
+
+          Path("ci.yaml").write_text("""
+          fasta:
+            path: ci_sequences.fasta
+            label_from: first_token
+          data:
+            min_seq_length: 50
+          results_dir: ci_results
+          embedders:
+            - name: composition
+            - name: kmer
+              k: 3
+          reducers:
+            - name: pca
+            - name: tsne
+              perplexity: 10
+          """)
+          PY
+          prot2vec-benchmark --config ci.yaml
+
+      - name: Every expected artefact was written
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          import pandas as pd
+
+          root = Path("ci_results")
+          for relative in [
+              "metrics/benchmark.csv",
+              "embeddings/sequences.tsv",
+              "embeddings/composition.npy",
+              "projections/composition__pca.tsv",
+              "figures/composition_pca.png",
+              "figures/metrics_summary.png",
+              "run_manifest.json",
+          ]:
+              assert (root / relative).exists(), f"missing {relative}"
+
+          results = pd.read_csv(root / "metrics/benchmark.csv")
+          assert len(results) == 4, f"expected 4 (embedder, reducer) pairs, got {len(results)}"
+          for column in ["knn_accuracy_highdim_mean", "precision_at_k", "silhouette",
+                         "adjusted_rand", "trustworthiness"]:
+              assert column in results.columns, f"missing metric {column}"
+
+          index = pd.read_csv(root / "embeddings/sequences.tsv", sep="\t")
+          assert index.sequence_id.is_unique, "exported sequence ids must be unique"
+
+          manifest = json.loads((root / "run_manifest.json").read_text())
+          assert manifest["dataset"]["n_families"] == 2
+          print("all artefacts present and consistent")
+          PY
+
+      - name: Reruns are reproducible
+        # A cached rerun must reproduce the first run's numbers exactly.
+        run: |
+          cp ci_results/metrics/benchmark.csv first_run.csv
+          prot2vec-benchmark --config ci.yaml
+          python -c "
+          import pandas as pd
+          a = pd.read_csv('first_run.csv'); b = pd.read_csv('ci_results/metrics/benchmark.csv')
+          assert a.equals(b), 'cached rerun produced different numbers'
+          print('rerun is bit-identical')
+          "

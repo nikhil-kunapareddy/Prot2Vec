@@ -4,51 +4,195 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prot2vec"
-version = "0.1.0"
-description = "Benchmarking protein sequence vectorization techniques"
+description = "Benchmark protein sequence embeddings on protein family separability"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
+dynamic = ["version"]
+authors = [{ name = "Sai Nikhil Kunapareddy" }]
+keywords = [
+    "bioinformatics",
+    "proteomics",
+    "protein-embeddings",
+    "protein-language-model",
+    "pfam",
+    "esm2",
+    "representation-learning",
+    "benchmark",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
-    "rich>=13.0",
     "biopython>=1.81",
+    "matplotlib>=3.7",
     "numpy>=1.24",
     "pandas>=2.0",
-    "scikit-learn>=1.3",
-    "umap-learn>=0.5",
-    "matplotlib>=3.7",
-    "seaborn>=0.13",
-    "requests>=2.31",
     "pyyaml>=6.0",
+    "requests>=2.31",
+    "rich>=13.0",
+    "scikit-learn>=1.3",
     "scipy>=1.11",
+    "seaborn>=0.13",
+    "umap-learn>=0.5",
 ]
 
 [project.optional-dependencies]
 esm = [
-    "torch>=2.0",
     "fair-esm>=2.0",
+    "torch>=2.0",
 ]
 llm = [
     "google-genai>=1.0",
     "python-dotenv>=1.0",
 ]
 dev = [
+    "mypy>=1.8",
+    "pandas-stubs",
+    "pre-commit>=3.6",
     "pytest>=7.4",
-    "pytest-cov",
-    "jupyter",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "types-pyyaml",
+    "types-requests",
+]
+notebooks = [
     "ipykernel",
+    "jupyter",
 ]
 
+[project.urls]
+Homepage = "https://github.com/nikhil-kunapareddy/Prot2Vec"
+Repository = "https://github.com/nikhil-kunapareddy/Prot2Vec"
+Issues = "https://github.com/nikhil-kunapareddy/Prot2Vec/issues"
+Changelog = "https://github.com/nikhil-kunapareddy/Prot2Vec/blob/main/CHANGELOG.md"
+
 [project.scripts]
-prot2vec-benchmark = "src.cli:main"
-prot2vec-download = "src.cli:download"
+prot2vec = "prot2vec.cli:main"
+prot2vec-benchmark = "prot2vec.cli:main"
+prot2vec-download = "prot2vec.cli:download"
+
+[tool.setuptools.dynamic]
+version = { attr = "prot2vec.__version__" }
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
+
+[tool.setuptools.package-data]
+prot2vec = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "slow: deselect with '-m \"not slow\"' (downloads data or loads large models)",
+    "network: requires internet access",
+    "esm: requires the [esm] extra",
+    "llm: requires the [llm] extra and an API key",
+]
+filterwarnings = [
+    "error::DeprecationWarning:prot2vec.*",
+]
+
+[tool.coverage.run]
+source = ["prot2vec"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "BLE",  # flake8-blind-except
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "ANN",  # flake8-annotations
+    "PTH",  # flake8-use-pathlib
+    "TID",  # flake8-tidy-imports
+]
+ignore = [
+    "D100",    # module docstring handled per-file
+    "D104",    # package docstring not required for every subpackage
+    "D107",    # __init__ documented in the class docstring
+    "D203",    # incompatible with D211
+    "D213",    # incompatible with D212
+    "ANN401",  # allow typing.Any where it is genuinely dynamic
+    "N803",    # X / X_high are conventional names for matrices in ML code
+    "N806",
+    "TID252",  # the package uses relative imports throughout; mixing in
+               # absolute ones only for parent modules would be inconsistent
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/prot2vec/__init__.py" = ["RUF022"]  # __all__ is grouped by subsystem
+"tests/*" = ["D", "ANN", "N802"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/prot2vec"]
+# Strict about our own code...
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+# ...and pragmatic about the scientific-Python stack. numpy's ndarray generics
+# and Biopython's partial annotations produce hundreds of findings that say
+# nothing about correctness, so these two stay off rather than being silenced
+# with per-line ignores.
+disallow_any_generics = false
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = [
+    "Bio.*",
+    "esm.*",
+    "google.*",
+    "matplotlib.*",
+    "pandas.*",
+    "requests.*",
+    "scipy.*",
+    "seaborn.*",
+    "sklearn.*",
+    "umap.*",
+    "yaml.*",
+]
+ignore_missing_imports = true

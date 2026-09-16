@@ -1,0 +1,27 @@
+# Benchmark your own sequences instead of Pfam.
+#
+# Point `path` at any protein FASTA and tell Prot2Vec how to read a group
+# label out of each header. Groups can be anything you want separated —
+# Pfam families, organisms, subcellular localisations, experimental
+# conditions — the metrics only care that the labels mean something.
+fasta:
+  path: data/my_proteins.fasta
+  label_from: first_token
+
+data:
+  min_seq_length: 50
+  max_per_family: null
+  random_state: 0
+
+results_dir: results
+cache_embeddings: true
+save_figures: true
+
+embedders:
+  - name: composition
+  - name: kmer
+    k: 3
+
+reducer:
+  name: pca
+  n_components: 2

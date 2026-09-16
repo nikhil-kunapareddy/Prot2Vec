@@ -5,8 +5,8 @@
 pfam:
   version: "35.0"
   families:
-    - PF00069   # Protein kinase
-    - PF00072   # GPCR
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
 
 data:
   cache_dir: data/raw

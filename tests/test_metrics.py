@@ -1,8 +1,23 @@
 """Tests for evaluation metrics."""
+
 import numpy as np
 import pytest
 
-from src.evaluation.metrics import compute_trustworthiness, knn_cv_accuracy, evaluate
+from prot2vec.evaluation.metrics import compute_trustworthiness, evaluate, knn_cv_accuracy
+
+#: Label-dependent metrics that do not depend on the `knn_space` setting.
+ALWAYS_REPORTED = frozenset(
+    {
+        "trustworthiness",
+        "silhouette",
+        "silhouette_2d",
+        "precision_at_k",
+        "adjusted_rand",
+        "normalized_mutual_info",
+    }
+)
+KNN_LOW = frozenset({"knn_accuracy_mean", "knn_accuracy_std"})
+KNN_HIGH = frozenset({"knn_accuracy_highdim_mean", "knn_accuracy_highdim_std"})
 
 
 def _make_data(n: int = 40, d_high: int = 10, d_low: int = 2, seed: int = 0):
@@ -13,18 +28,73 @@ def _make_data(n: int = 40, d_high: int = 10, d_low: int = 2, seed: int = 0):
     return X_high, X_low, labels
 
 
+def _two_clusters(n_per: int = 20, d: int = 8, spread: float = 0.3, seed: int = 0):
+    """Two tight clusters separated by ~90 degrees, embedded in ``d`` dimensions.
+
+    All structure lives in the first two dimensions and the rest are exactly
+    zero, so ``X[:, :2]`` preserves every pairwise distance -- which makes this
+    a valid fixture for "a faithful projection scores 1.0". The clusters are
+    offset along different axes rather than around the origin, because cosine
+    distance (the default k-NN metric) is undefined in direction for points
+    sitting on the origin.
+    """
+    rng = np.random.default_rng(seed)
+    a = np.zeros((n_per, d))
+    b = np.zeros((n_per, d))
+    a[:, 0] = 10.0 + rng.normal(scale=spread, size=n_per)
+    a[:, 1] = rng.normal(scale=spread, size=n_per)
+    b[:, 0] = rng.normal(scale=spread, size=n_per)
+    b[:, 1] = 10.0 + rng.normal(scale=spread, size=n_per)
+    return np.vstack([a, b]), ["A"] * n_per + ["B"] * n_per
+
+
 class TestTrustworthiness:
     def test_range(self):
         X_high, X_low, _ = _make_data()
         tw = compute_trustworthiness(X_high, X_low, n_neighbors=5)
         assert 0.0 <= tw <= 1.0
 
-    def test_perfect_preservation(self):
-        # When X_low == X_high[:, :2], trustworthiness should be very high.
-        X_high = np.eye(20)
+    def test_identity_projection_is_perfect(self):
+        # Projecting onto the axes that carry the structure preserves every
+        # neighbourhood, so trustworthiness must be exactly 1.
+        X_high, _ = _two_clusters(d=8)
         X_low = X_high[:, :2]
-        tw = compute_trustworthiness(X_high, X_low, n_neighbors=5)
-        assert tw > 0.8
+        assert compute_trustworthiness(X_high, X_low, n_neighbors=5) == pytest.approx(1.0)
+
+    def test_structure_destroying_projection_scores_worse_than_identity(self):
+        X_high, _ = _two_clusters(d=8)
+        faithful = compute_trustworthiness(X_high, X_high[:, :2], n_neighbors=5)
+        rng = np.random.default_rng(1)
+        shuffled = compute_trustworthiness(
+            X_high, rng.standard_normal((X_high.shape[0], 2)), n_neighbors=5
+        )
+        assert shuffled < faithful
+
+    def test_equidistant_points_cannot_be_preserved(self):
+        # Rows of the identity matrix are mutually equidistant, so their
+        # k-neighbourhoods are arbitrary and no 2-D projection can reproduce
+        # them. A low score here is the correct answer, not a bug -- an earlier
+        # version of this test asserted > 0.8 and failed permanently.
+        X_high = np.eye(20)
+        tw = compute_trustworthiness(X_high, X_high[:, :2], n_neighbors=5)
+        assert 0.0 <= tw < 0.5
+
+    def test_mismatched_rows_raise(self):
+        X_high, X_low, _ = _make_data()
+        with pytest.raises(ValueError, match="same samples"):
+            compute_trustworthiness(X_high, X_low[:10])
+
+    def test_too_many_neighbors_is_clamped(self):
+        X_high, X_low, _ = _make_data(n=10)
+        assert 0.0 <= compute_trustworthiness(X_high, X_low, n_neighbors=50) <= 1.0
+
+    def test_accepts_sparse_input(self):
+        import scipy.sparse
+
+        X_high, X_low, _ = _make_data()
+        tw_dense = compute_trustworthiness(X_high, X_low, n_neighbors=5)
+        tw_sparse = compute_trustworthiness(scipy.sparse.csr_matrix(X_high), X_low, n_neighbors=5)
+        assert tw_sparse == pytest.approx(tw_dense)
 
 
 class TestKnnCvAccuracy:
@@ -35,18 +105,75 @@ class TestKnnCvAccuracy:
         assert isinstance(std, float)
 
     def test_perfectly_separable(self):
-        # Two well-separated clusters → high accuracy.
         X = np.vstack([np.zeros((20, 2)), np.ones((20, 2)) * 100])
         y = ["A"] * 20 + ["B"] * 20
         mean, _ = knn_cv_accuracy(X, y, n_neighbors=3, metric="euclidean")
         assert mean == pytest.approx(1.0)
 
+    def test_is_deterministic(self):
+        _, X_low, labels = _make_data()
+        assert knn_cv_accuracy(X_low, labels) == knn_cv_accuracy(X_low, labels)
+
+    def test_folds_reduced_for_small_families(self, caplog):
+        # Three members cannot support five stratified folds; the fold count
+        # should drop rather than raise.
+        X = np.vstack([np.zeros((3, 2)), np.ones((20, 2)) * 100])
+        y = ["A"] * 3 + ["B"] * 20
+        with caplog.at_level("WARNING"):
+            mean, _ = knn_cv_accuracy(X, y, n_neighbors=1, n_splits=5, metric="euclidean")
+        assert 0.0 <= mean <= 1.0
+        assert "reducing cross-validation" in caplog.text.lower()
+
+    def test_single_family_raises(self):
+        X, _ = _two_clusters()
+        with pytest.raises(ValueError, match="at least two families"):
+            knn_cv_accuracy(X, ["A"] * X.shape[0])
+
+    def test_singleton_family_raises(self):
+        # A family of one cannot appear in both a train and a test fold.
+        X = np.vstack([np.zeros((1, 2)), np.ones((20, 2))])
+        with pytest.raises(ValueError, match="at least two families"):
+            knn_cv_accuracy(X, ["A"] + ["B"] * 20)
+
+    def test_label_count_mismatch_raises(self):
+        X, y = _two_clusters()
+        with pytest.raises(ValueError, match="labels"):
+            knn_cv_accuracy(X, y[:5])
+
 
 class TestEvaluate:
-    def test_returns_expected_keys(self):
+    def test_reports_both_spaces_by_default(self):
         X_high, X_low, labels = _make_data()
         result = evaluate(X_high, X_low, labels)
-        assert set(result.keys()) == {"trustworthiness", "knn_accuracy_mean", "knn_accuracy_std"}
+        assert set(result) == ALWAYS_REPORTED | KNN_LOW | KNN_HIGH
+
+    @pytest.mark.parametrize("knn_space", ["low", "high", "both"])
+    def test_knn_space_selects_knn_metrics(self, knn_space):
+        X_high, X_low, labels = _make_data()
+        expected = (
+            ALWAYS_REPORTED
+            | {
+                "low": KNN_LOW,
+                "high": KNN_HIGH,
+                "both": KNN_LOW | KNN_HIGH,
+            }[knn_space]
+        )
+        assert set(evaluate(X_high, X_low, labels, knn_space=knn_space)) == expected
+
+    def test_degenerate_input_skips_metrics_rather_than_failing(self, caplog):
+        # One family makes silhouette, retrieval and clustering meaningless,
+        # but trustworthiness is still well defined and should be reported.
+        X_high, X_low, _ = _make_data()
+        labels = ["A"] * X_high.shape[0]
+        with caplog.at_level("WARNING"):
+            result = evaluate(X_high, X_low, labels, knn_space="low")
+        assert "trustworthiness" in result
+        assert "silhouette" not in result
+        assert "Skipping" in caplog.text
+
+    def test_metric_panel_is_deterministic(self):
+        X_high, X_low, labels = _make_data()
+        assert evaluate(X_high, X_low, labels) == evaluate(X_high, X_low, labels)
 
     def test_values_in_valid_range(self):
         X_high, X_low, labels = _make_data()
@@ -54,3 +181,9 @@ class TestEvaluate:
         assert 0.0 <= result["trustworthiness"] <= 1.0
         assert 0.0 <= result["knn_accuracy_mean"] <= 1.0
         assert result["knn_accuracy_std"] >= 0.0
+
+    def test_separable_data_scores_high_in_both_spaces(self):
+        X_high, labels = _two_clusters(d=8)
+        result = evaluate(X_high, X_high[:, :2], labels, n_neighbors_knn=3)
+        assert result["knn_accuracy_mean"] == pytest.approx(1.0)
+        assert result["knn_accuracy_highdim_mean"] == pytest.approx(1.0)

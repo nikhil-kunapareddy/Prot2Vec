@@ -1,0 +1,59 @@
+name: Bug report
+description: Something behaves incorrectly or crashes
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If the run got far enough to write
+        `results/run_manifest.json`, attaching it captures every version and
+        setting in one go and saves a round trip.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Experiment config
+      description: The YAML you ran, or the name of the preset.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The command you ran and the full error or unexpected output.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Prot2Vec version
+      description: "Output of `prot2vec-benchmark --version`, or the commit SHA."
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Python and platform
+      description: "e.g. Python 3.12.1, macOS 14.5 arm64, or Ubuntu 22.04 + CUDA 12.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: manifest
+    attributes:
+      label: run_manifest.json
+      description: Optional, but the fastest way to capture your environment.
+      render: json

@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "Prot2Vec: a benchmark harness for protein sequence embeddings"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Kunapareddy
+    given-names: Sai Nikhil
+repository-code: "https://github.com/nikhil-kunapareddy/Prot2Vec"
+license: MIT
+version: 0.2.0
+abstract: >-
+  Prot2Vec benchmarks protein sequence embedding methods on protein family
+  separability. It compares amino acid composition, k-mer TF-IDF, ESM-2 protein
+  language models and general-purpose LLM embedding APIs across PCA, UMAP and
+  t-SNE projections, scoring every pair with family-separability,
+  homology-retrieval, clustering-agreement and projection-trustworthiness
+  metrics against curated Pfam seed alignments or user-supplied FASTA.
+keywords:
+  - bioinformatics
+  - proteomics
+  - protein embeddings
+  - protein language models
+  - representation learning
+  - Pfam
+  - benchmark

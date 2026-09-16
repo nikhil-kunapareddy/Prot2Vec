@@ -1,28 +1,112 @@
+# ============================================================================
+# Prot2Vec — canonical configuration reference
+#
+# Every option Prot2Vec understands is listed here with its default. Copy this
+# file (or one from configs/experiments/) and edit it rather than passing
+# flags: an experiment is a file you can commit, diff and cite.
+#
+#   prot2vec-benchmark --config configs/default.yaml
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Data source — supply exactly one of `pfam:` or `fasta:`
+# ----------------------------------------------------------------------------
+
+# Option A: curated Pfam seed alignments, downloaded from the EBI mirror.
 pfam:
+  # Pinning a release keeps numbers comparable across machines and over time.
   version: "35.0"
   families:
-    - PF00069   # Protein kinase
-    - PF00072   # GPCR
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
+    # src/prot2vec/data/families.py lists more curated accessions; any valid
+    # Pfam accession works, whether or not it appears there.
+
+# Option B: your own sequences. Uncomment to use instead of `pfam:`.
+# fasta:
+#   path: data/my_proteins.fasta      # plain or .gz
+#   label_from: first_token           # how to read a group label per record:
+#                                     #   first_token  -> ">PF00069 sp|..."  -> PF00069
+#                                     #   last_token   -> ">sp|... KINASE"   -> KINASE
+#                                     #   description  -> everything after the id
+#                                     #   pipe:2       -> field 2 of a |-delimited header
+#                                     #   none         -> one single group (unlabelled)
 
 data:
-  cache_dir: data/raw
-  min_seq_length: 50
+  cache_dir: data/raw       # where Pfam-A.seed.gz is cached (~500 MB, once)
+  min_seq_length: 50        # drop sequences shorter than this after cleaning
+  max_per_family: null      # cap per family, e.g. 100, to balance the benchmark.
+                            # Seed alignments differ in size by >10x, and an
+                            # unbalanced set rewards predicting the big family.
+  random_state: 0           # seed for the subsampling above
 
-results_dir: results
-cache_embeddings: true
-save_figures: true
-
+# ----------------------------------------------------------------------------
+# Representations to compare — each is computed once and scored against every
+# reducer below.
+# ----------------------------------------------------------------------------
 embedders:
+  # 20-d residue frequency vector. No pretraining, no order information: the
+  # honest floor for every other method.
   - name: composition
-  - name: kmer
-    k: 3
-  - name: esm2
-    model_key: esm2_t12_35M
-    batch_size: 16
-    max_len: 512
 
+  # TF-IDF over overlapping residue k-mers. Keeps local order, so short
+  # conserved motifs contribute. Sparse, ~20^k columns.
+  - name: kmer
+    k: 3                    # 2-4 is the useful range
+    min_df: 1               # ignore k-mers seen in fewer than this many sequences
+
+  # ESM-2 protein language model, mean-pooled over residues.
+  # Needs: pip install "prot2vec[esm]"
+  - name: esm2
+    model_key: esm2_t12_35M # esm2_t6_8M (320-d) | esm2_t12_35M (480-d)
+                            # esm2_t30_150M (640-d) | esm2_t33_650M (1280-d)
+    device: null            # null auto-detects cuda > mps > cpu
+    batch_size: 16          # lower this first on out-of-memory
+    max_len: 512            # longer sequences are centre-cropped
+
+  # General-purpose text embedding API applied to raw residue letters.
+  # A control, not a protein method — see src/prot2vec/embedders/llm.py.
+  # Needs: pip install "prot2vec[llm]" and GOOGLE_API_KEY in .env
+  # - name: llm
+  #   provider: google
+  #   model: gemini-embedding-001
+  #   batch_size: 32
+  #   max_len: 512
+  #   output_dim: null      # null keeps the model default (3072 for Gemini)
+
+# ----------------------------------------------------------------------------
+# Projection — `reducer:` for one, or `reducers:` for a list to compare
+# ----------------------------------------------------------------------------
 reducer:
-  name: umap
-  n_neighbors: 15
-  min_dist: 0.1
-  metric: cosine
+  name: umap                # pca | umap | tsne
+  n_components: 2
+  n_neighbors: 15           # umap only
+  min_dist: 0.1             # umap only
+  metric: cosine            # umap only
+  # perplexity: 30          # tsne only
+
+# reducers:                 # use instead of `reducer:` to compare projections
+#   - name: pca
+#   - name: umap
+#     n_neighbors: 15
+#   - name: tsne
+#     perplexity: 30
+
+# ----------------------------------------------------------------------------
+# Scoring
+# ----------------------------------------------------------------------------
+metrics:
+  n_neighbors_trust: 10     # neighbourhood size for trustworthiness
+  n_neighbors_knn: 5        # k for the cross-validated k-NN classifier
+  precision_at_k: 5         # neighbours retrieved per query for P@k
+  metric: cosine            # distance metric for k-NN, silhouette and retrieval
+  knn_space: both           # low (2-D only) | high (embedding only) | both
+  random_state: 0           # seed for CV folds and k-means
+
+# ----------------------------------------------------------------------------
+# Output
+# ----------------------------------------------------------------------------
+results_dir: results
+cache_embeddings: true      # reuse embeddings on disk; keep on for API embedders
+save_figures: true          # per-pair scatter plots + summary bar chart
+export_embeddings: true     # sequences.tsv, <embedder>.npy, projections/*.tsv

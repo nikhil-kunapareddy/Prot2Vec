@@ -210,8 +210,8 @@ __marimo__/
 results/
 data/raw/
 
-# prot2vec — placeholder files
-notebooks/
+# prot2vec — notebook checkpoints (notebooks themselves are tracked)
+notebooks/.ipynb_checkpoints/
 
 # prot2vec — keep Claude Code project instructions tracked
 !CLAUDE.md

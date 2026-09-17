@@ -1,0 +1,53 @@
+# Protein language models against the cheap baselines.
+#
+# Needs: pip install "prot2vec[esm,hf]"
+#
+# The comparison that matters. `composition` and `dipeptide` cost milliseconds;
+# ESM-2 and ProtBERT cost a GPU and several gigabytes of weights. This config
+# puts them in the same table with the same metrics so the difference is a
+# number rather than an assumption.
+#
+# Watch `composition_distance_rho` on the pretrained rows: if it is near 1.0,
+# the model is largely re-encoding amino acid frequencies and the baselines
+# will be close behind.
+pfam:
+  version: "35.0"
+  families:
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
+    - PF00001   # 7tm_1         — 7TM receptor, rhodopsin-family GPCR
+    - PF00005   # ABC_tran      — ABC transporter ATP-binding domain
+
+data:
+  cache_dir: data/raw
+  min_seq_length: 50
+  max_per_family: 60
+
+results_dir: results
+cache_embeddings: true      # keep on: re-running should not re-embed
+save_figures: true
+
+embedders:
+  - name: composition
+  - name: dipeptide
+  - name: esm2
+    model_key: esm2_t12_35M
+    batch_size: 16
+    max_len: 512
+  - name: hf
+    model: protbert
+    pooling: mean
+    batch_size: 8
+    max_len: 1024
+  # Larger and slower; uncomment when you have the VRAM.
+  # - name: hf
+  #   model: prott5
+  #   batch_size: 4
+  # - name: esm2
+  #   model_key: esm2_t33_650M
+
+reducers:
+  - name: pca
+  - name: umap
+    n_neighbors: 15
+    metric: cosine

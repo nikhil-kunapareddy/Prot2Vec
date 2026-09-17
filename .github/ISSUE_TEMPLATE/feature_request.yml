@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest an embedder, metric, reducer or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to find out?
+      description: >
+        The scientific or practical question behind the request. Prot2Vec
+        exists to answer "which representation separates my groups", so it
+        helps to know what you would conclude from the result.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of addition is this?
+      options:
+        - A new embedder (representation)
+        - A new reducer (projection)
+        - A new metric
+        - A new data source or input format
+        - Output, export or reporting
+        - Documentation
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would it look like?
+      description: >
+        For a method, a link to the paper or reference implementation. For a
+        metric, what it measures and its range. For an output, its shape.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing options you have tried, and why they fall short.

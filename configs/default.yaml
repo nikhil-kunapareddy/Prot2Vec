@@ -1,32 +1,193 @@
+# ============================================================================
+# Prot2Vec — canonical configuration reference
+#
+# Every option Prot2Vec understands is listed here with its default. Copy this
+# file (or one from configs/experiments/) and edit it rather than passing
+# flags: an experiment is a file you can commit, diff and cite.
+#
+#   prot2vec-benchmark --config configs/default.yaml
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Data source — supply exactly one of `pfam:` or `fasta:`
+# ----------------------------------------------------------------------------
+
+# Option A: curated Pfam seed alignments, downloaded from the EBI mirror.
 pfam:
+  # Pinning a release keeps numbers comparable across machines and over time.
   version: "35.0"
   families:
-    - PF00069   # Protein kinase
-    - PF00072   # GPCR
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
+    # src/prot2vec/data/families.py lists more curated accessions; any valid
+    # Pfam accession works, whether or not it appears there.
+
+# Option B: your own sequences. Uncomment to use instead of `pfam:`.
+# fasta:
+#   path: data/my_proteins.fasta      # plain or .gz
+#   label_from: first_token           # how to read a group label per record:
+#                                     #   first_token  -> ">PF00069 sp|..."  -> PF00069
+#                                     #   last_token   -> ">sp|... KINASE"   -> KINASE
+#                                     #   description  -> everything after the id
+#                                     #   pipe:2       -> field 2 of a |-delimited header
+#                                     #   none         -> one single group (unlabelled)
 
 data:
-  cache_dir: data/raw
-  min_seq_length: 50
+  cache_dir: data/raw       # where Pfam-A.seed.gz is cached (~500 MB, once)
+  alphabet: protein         # protein | dna | rna
+                            # SET THIS CORRECTLY for nucleotides. A, C, G, T and
+                            # N are all valid amino acid codes, so DNA cleaned
+                            # against the protein alphabet is silently mangled
+                            # rather than rejected.
+  min_seq_length: 50        # drop sequences shorter than this after cleaning
+  max_per_family: null      # cap per family, e.g. 100, to balance the benchmark.
+                            # Seed alignments differ in size by >10x, and an
+                            # unbalanced set rewards predicting the big family.
+  random_state: 0           # seed for the subsampling above
 
-results_dir: results
-cache_embeddings: true
-save_figures: true
-
+# ----------------------------------------------------------------------------
+# Representations to compare — each is computed once and scored against every
+# reducer below. Nine are available; mix interpretable descriptors with
+# pretrained models so you can see what the pretraining actually bought.
+# ----------------------------------------------------------------------------
 embedders:
-  - name: composition
-  - name: kmer
-    k: 3
-  - name: esm2
-    model_key: esm2_t12_35M
-    batch_size: 16
-    max_len: 512
+  # --- Interpretable descriptors: no pretraining, every feature has a meaning
 
+  # 20-d residue frequency vector. Discards order entirely: the honest floor.
+  - name: composition
+
+  # Dipeptide composition (DPC), |alphabet|^2 dims in a fixed column order.
+  # First-order order information, comparable across datasets.
+  - name: dipeptide
+    # alphabet: protein     # defaults to data.alphabet
+
+  # 23 physical quantities (hydropathy, charge, polarity, volume, weight —
+  # each as mean/std/min/max — plus length and aromatic/charged fractions).
+  # Protein only.
+  # - name: physicochemical
+
+  # Composition / Transition / Distribution, 147 dims over 7 property groups.
+  # Captures *where* residue classes sit along the sequence. Protein only.
+  # - name: ctd
+
+  # --- Corpus- or position-derived
+
+  # TF-IDF over overlapping k-mers. Sparse, vocabulary learned from the corpus.
+  - name: kmer
+    k: 3                    # 2-4 is the useful range
+    min_df: 1               # ignore k-mers seen in fewer than this many sequences
+
+  # Positional one-hot, max_len * |alphabet| dims, sparse. Keeps everything but
+  # requires positions to be comparable across sequences.
+  # - name: onehot
+  #   max_len: 256
+  #   truncate: center      # center | start | end
+
+  # --- Pretrained models
+
+  # ESM-2 via fair-esm. Needs: pip install "prot2vec[esm]"
+  # - name: esm2
+  #   model_key: esm2_t12_35M   # esm2_t6_8M (320-d) | esm2_t12_35M (480-d)
+  #                             # esm2_t30_150M (640-d) | esm2_t33_650M (1280-d)
+  #   device: null            # null auto-detects cuda > mps > cpu
+  #   batch_size: 16
+  #   max_len: 512
+
+  # Any Hugging Face encoder. Needs: pip install "prot2vec[hf]"
+  # Presets: protbert, protbert_bfd, prott5, prott5_bfd, prostt5, ankh_base,
+  #          ankh_large, esm2_8m, esm2_35m, esm2_150m, esm2_650m,
+  #          dnabert2, nucleotide_transformer  — or any Hub model id.
+  # - name: hf
+  #   model: protbert
+  #   pooling: mean           # mean | cls | max
+  #   layer: -1               # intermediate layers often transfer better
+  #   batch_size: 8
+  #   max_len: 1024
+  #   device: null
+  #   trust_remote_code: false  # required by DNABERT-2; runs code from the Hub
+
+  # General-purpose text embedding API on raw residue letters.
+  # A control, not a protein method. Needs [llm] and GOOGLE_API_KEY in .env
+  # - name: llm
+  #   provider: google
+  #   model: gemini-embedding-001
+  #   batch_size: 32
+  #   max_len: 512
+  #   output_dim: null        # null keeps the model default (3072 for Gemini)
+
+# ----------------------------------------------------------------------------
+# Projection — `reducer:` for one, or `reducers:` for a list to compare.
+# Thirteen are available. Disagreement between them is itself a result.
+# ----------------------------------------------------------------------------
 reducer:
   name: umap
-  n_neighbors: 15
-  min_dist: 0.1
-  metric: cosine
+  n_components: 2
+  n_neighbors: 15           # umap, isomap, spectral, lle, pacmap
+  min_dist: 0.1             # umap only
+  metric: cosine            # umap only
 
-evaluation:
-  n_neighbors_trust: 10
-  n_neighbors_knn: 5
+# reducers:                 # use instead of `reducer:` to compare projections
+#   # Linear and deterministic
+#   - name: pca             # standardised, then principal components
+#   - name: svd             # truncated SVD / LSA — best for sparse k-mer input
+#   - name: nmf             # parts-based; requires non-negative input
+#     max_iter: 500
+#   - name: random_projection   # control: structure with no fitting at all
+#   # Manifold
+#   - name: umap
+#     n_neighbors: 15
+#     min_dist: 0.1
+#     metric: cosine
+#   - name: tsne
+#     perplexity: 30
+#   - name: isomap          # geodesic distances; preserves global structure
+#     n_neighbors: 10
+#   - name: mds             # literal picture of the distance matrix
+#     n_init: 4
+#   - name: spectral        # Laplacian eigenmaps
+#     n_neighbors: 10
+#   - name: lle             # locally linear embedding
+#     n_neighbors: 10
+#   - name: kernel_pca      # non-linear but deterministic
+#     kernel: cosine        # cosine | rbf | poly | sigmoid | linear
+#     gamma: null
+#   # Optional extras
+#   - name: phate           # pip install "prot2vec[phate]" — for continua
+#     knn: 5
+#     decay: 40
+#   - name: pacmap          # pip install "prot2vec[pacmap]" — global structure
+#     n_neighbors: 10
+#     mn_ratio: 0.5
+#     fp_ratio: 2.0
+
+# ----------------------------------------------------------------------------
+# Scoring — 31 metrics in five groups. Narrow `groups` to shorten the table.
+# ----------------------------------------------------------------------------
+metrics:
+  groups:                   # omit for all five
+    - projection            # trustworthiness, continuity, neighborhood
+                            # preservation, lcmc, distance correlation
+    - classification        # k-NN accuracy (full-dim and 2-D), macro F1,
+                            # balanced accuracy, MCC, Cohen's kappa, AUROC
+    - retrieval             # precision@k, MAP, R-precision, same-class AUROC
+    - clustering            # silhouette, ARI, NMI, homogeneity, completeness,
+                            # V-measure, Fowlkes-Mallows, Davies-Bouldin,
+                            # Calinski-Harabasz
+    - confound              # length/distance rho, composition/distance rho,
+                            # and k-NN accuracy from sequence LENGTH ALONE.
+                            # Read every score above against that last one.
+  n_neighbors_trust: 10     # neighbourhood size for the projection metrics
+  n_neighbors_knn: 5        # k for the cross-validated k-NN classifier
+  precision_at_k: 5         # neighbours retrieved per query for P@k
+  metric: cosine            # distance metric for classification, retrieval,
+                            # silhouette and the confound checks
+  knn_space: both           # low (2-D only) | high (embedding only) | both
+  random_state: 0           # seed for CV folds and k-means
+
+# ----------------------------------------------------------------------------
+# Output
+# ----------------------------------------------------------------------------
+results_dir: results
+cache_embeddings: true      # reuse embeddings on disk; keep on for API embedders
+save_figures: true          # per-pair scatter plots + summary bar chart
+export_embeddings: true     # sequences.tsv, <embedder>.npy, projections/*.tsv

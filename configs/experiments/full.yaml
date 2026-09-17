@@ -2,11 +2,11 @@
 pfam:
   version: "35.0"
   families:
-    - PF00069   # Protein kinase
-    - PF00072   # GPCR
-    - PF00001   # 7 transmembrane receptor (rhodopsin)
-    - PF00004   # ATPase
-    - PF00005   # ABC transporter
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
+    - PF00001   # 7tm_1         — 7TM receptor, rhodopsin-family GPCR
+    - PF00004   # AAA           — ATPase associated with diverse activities
+    - PF00005   # ABC_tran      — ABC transporter ATP-binding domain
 
 data:
   cache_dir: data/raw
@@ -30,7 +30,3 @@ reducer:
   n_neighbors: 15
   min_dist: 0.1
   metric: cosine
-
-evaluation:
-  n_neighbors_trust: 10
-  n_neighbors_knn: 5

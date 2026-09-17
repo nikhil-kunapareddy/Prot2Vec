@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question about interpreting results
+    url: https://github.com/nikhil-kunapareddy/Prot2Vec/discussions
+    about: >
+      For "what does this score mean?", start a discussion. The README section
+      "The metrics, and how to read them" covers the common patterns.
+  - name: Pfam accession identities
+    url: https://www.ebi.ac.uk/interpro/
+    about: Check what a Pfam family actually is before filing a labelling issue.

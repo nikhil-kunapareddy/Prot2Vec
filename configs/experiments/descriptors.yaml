@@ -1,0 +1,33 @@
+# What does pretraining actually buy you?
+#
+# The four interpretable descriptors, head to head. None of them has seen a
+# single protein outside your dataset, and none takes more than a few seconds
+# to compute — so whatever score they reach is the bar a language model has to
+# clear to justify its GPU time. Read the results next to
+# `length_only_knn_accuracy`: if these descriptors and raw sequence length
+# score the same, the families differ in size, not in chemistry.
+pfam:
+  version: "35.0"
+  families:
+    - PF00069   # Pkinase       — protein kinase domain
+    - PF00072   # Response_reg  — two-component response regulator
+    - PF00001   # 7tm_1         — 7TM receptor, rhodopsin-family GPCR
+
+data:
+  cache_dir: data/raw
+  min_seq_length: 50
+  max_per_family: 80
+
+results_dir: results
+cache_embeddings: true
+save_figures: true
+
+embedders:
+  - name: composition       # 20-d, order-free
+  - name: dipeptide         # 400-d, first-order order
+  - name: physicochemical   # 23-d, physical units
+  - name: ctd               # 147-d, positional distribution of residue classes
+
+reducer:
+  name: pca
+  n_components: 2

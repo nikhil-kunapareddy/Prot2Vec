@@ -40,6 +40,7 @@ from .data.dataset import ProteinDataset
 from .data.families import describe
 from .data.pfam import download_pfam_seed, parse_pfam_families
 from .embedders.base import SequenceEmbedder
+from .evaluation import resolve_groups
 from .pipeline import RunConfig, run
 from .reduction.reducers import DimReducer
 
@@ -82,6 +83,7 @@ def print_config_summary(cfg: dict[str, Any], dataset: ProteinDataset) -> None:
     if pfam_cfg:
         table.add_row("Pfam version", str(pfam_cfg.get("version", "-")))
     table.add_row("Source", dataset.source)
+    table.add_row("Alphabet", f"[cyan]{dataset.alphabet}[/cyan]")
     table.add_row("Sequences", f"[yellow]{len(dataset)}[/yellow] total")
     for family, count in dataset.family_counts.items():
         table.add_row("", f"  [cyan]{describe(family)}[/cyan]  →  {count} sequences")
@@ -122,9 +124,12 @@ def _score_style(value: float) -> str:
 def print_results_table(results: Any, baseline: float | None = None) -> None:
     """Print the benchmark results, one row per (embedder, reducer) pair.
 
-    Only the headline metrics are shown; ``benchmark.csv`` carries every
-    column. The best row by full-dimensional k-NN accuracy is marked, since
-    that is the metric most runs are actually trying to compare.
+    Deliberately narrow. A full run can produce sixty rows and thirty-one
+    metrics, which no terminal renders legibly, so five columns are shown and
+    ``benchmark.csv`` carries everything. The five chosen are the ones that
+    answer different questions: two k-NN scores plus trustworthiness separate
+    "the representation is bad" from "the projection lost it", and the
+    retrieval pair says whether a neighbour lookup would actually work.
 
     Parameters
     ----------
@@ -137,52 +142,100 @@ def print_results_table(results: Any, baseline: float | None = None) -> None:
     console.print(Rule("[bold cyan]Benchmark Results[/bold cyan]", style="cyan"))
     console.print()
 
-    # (column header, results column, justify) for the columns present.
     candidates = [
-        ("kNN-full", "knn_accuracy_highdim_mean", "knn_accuracy_highdim_std"),
-        ("P@k", "precision_at_k", None),
-        ("Silh", "silhouette", None),
-        ("ARI", "adjusted_rand", None),
-        ("Trust", "trustworthiness", None),
-        ("kNN-2D", "knn_accuracy_mean", None),
+        ("kNN-hi", "knn_accuracy_highdim_mean"),
+        ("kNN-2D", "knn_accuracy_mean"),
+        ("P@k", "precision_at_k"),
+        ("AUROC", "same_class_auroc"),
+        ("Trust", "trustworthiness"),
     ]
     columns = [c for c in candidates if c[1] in results.columns]
 
     best_row = None
-    for _, column, _ in columns:
+    for _, column in columns:
         if column == "knn_accuracy_highdim_mean":
             best_row = results[column].idxmax()
             break
 
     table = Table(box=box.ROUNDED, border_style="cyan")
     table.add_column("Method", style="bold white", no_wrap=True)
-    for header, _, _ in columns:
-        table.add_column(header, justify="center")
+    for header, _ in columns:
+        table.add_column(header, justify="right")
 
     for index, row in results.iterrows():
+        method = str(row["method"])
+        if len(method) > 24:
+            method = method[:21] + "..."
         marker = " [bold yellow]*[/bold yellow]" if index == best_row else ""
-        cells = [f"{row['method']}{marker}"]
-        for _, column, std_column in columns:
-            value = row[column]
-            # Silhouette and ARI are meaningful below zero, so they are not
-            # colour-graded on the same 0-1 scale as the accuracies.
-            style = _score_style(value) if column not in ("silhouette", "adjusted_rand") else ""
-            rendered = f"[{style}]{value:.3f}[/]" if style else f"{value:.3f}"
-            if std_column and std_column in results.columns:
-                rendered += f" [dim]±{row[std_column]:.3f}[/dim]"
-            cells.append(rendered)
+        cells = [f"{method}{marker}"]
+        for _, column in columns:
+            value = float(row[column])
+            cells.append(f"[{_score_style(value)}]{value:.3f}[/]")
         table.add_row(*cells)
 
     console.print(table)
     if baseline is not None:
         console.print(
-            f"  [dim]Chance baseline (majority class): {baseline:.3f} — k-NN and P@k "
+            f"  [dim]Chance baseline (majority class): {baseline:.3f} - k-NN and P@k "
             "at or below this are no better than guessing.[/dim]"
         )
     console.print(
-        "  [dim]* best by full-dimensional k-NN.  Full metric set: metrics/benchmark.csv[/dim]"
+        "  [dim]* best by full-dimensional k-NN.  All metrics: metrics/benchmark.csv[/dim]"
     )
+    _warn_about_confounds(results)
     console.print()
+
+
+def _warn_about_confounds(results: Any) -> None:
+    """Flag results that sequence length or composition already explains.
+
+    The easiest way to get a good-looking embedding result is to accidentally
+    measure something trivial, and the columns that reveal it are buried among
+    thirty others. Surfacing them next to the table means the caveat arrives
+    with the result rather than after publication.
+    """
+    warnings: list[str] = []
+
+    if "length_only_knn_accuracy" in results.columns:
+        length_only = float(results["length_only_knn_accuracy"].iloc[0])
+        column = (
+            "knn_accuracy_highdim_mean"
+            if "knn_accuracy_highdim_mean" in results.columns
+            else "knn_accuracy_mean"
+        )
+        if column in results.columns:
+            best = float(results[column].max())
+            if length_only >= best - 0.05:
+                warnings.append(
+                    f"sequence length alone scores {length_only:.3f} k-NN accuracy "
+                    f"against {best:.3f} for the best embedding - these groups may "
+                    "differ mainly in length"
+                )
+
+    if "length_distance_rho" in results.columns:
+        worst = results.loc[results["length_distance_rho"].abs().idxmax()]
+        rho = float(worst["length_distance_rho"])
+        if abs(rho) >= 0.5:
+            warnings.append(
+                f"{worst['method']} has a length/distance rho of {rho:+.2f} - much "
+                "of what it encodes is sequence length"
+            )
+
+    if "composition_distance_rho" in results.columns and "embedder" in results.columns:
+        # Composition-based embedders correlate with composition by
+        # construction; the finding is only interesting for learned ones.
+        learned = results[~results["embedder"].isin(("composition", "dipeptide"))]
+        if not learned.empty:
+            worst = learned.loc[learned["composition_distance_rho"].abs().idxmax()]
+            rho = float(worst["composition_distance_rho"])
+            if abs(rho) >= 0.9:
+                warnings.append(
+                    f"{worst['method']} has a composition/distance rho of {rho:+.2f}"
+                    " - it may be re-encoding residue frequencies"
+                )
+
+    for message in warnings:
+        console.print(f"  [yellow]![/yellow] [dim]{message}[/dim]")
 
 
 def print_footer(elapsed: float, results_dir: Path) -> None:
@@ -222,8 +275,16 @@ def _fail(message: str, hint: str | None = None) -> NoReturn:
 # ---------------------------------------------------------------------------
 
 
-def _build_embedder(cfg: dict[str, Any]) -> SequenceEmbedder:
+def _build_embedder(cfg: dict[str, Any], alphabet: str = "protein") -> SequenceEmbedder:
     """Instantiate one embedder from its config block.
+
+    Parameters
+    ----------
+    cfg
+        The embedder's config mapping; ``cfg["name"]`` selects the class.
+    alphabet
+        Dataset alphabet, passed to the embedders that are alphabet-aware so
+        that a DNA run does not silently use amino acid columns.
 
     Raises
     ------
@@ -231,14 +292,37 @@ def _build_embedder(cfg: dict[str, Any]) -> SequenceEmbedder:
         If ``cfg["name"]`` is not a known embedder.
     """
     name = cfg["name"]
+
     if name == "composition":
         from .embedders.composition import CompositionEmbedder
 
         return CompositionEmbedder()
+    if name == "dipeptide":
+        from .embedders.dipeptide import DipeptideEmbedder
+
+        return DipeptideEmbedder(alphabet=cfg.get("alphabet", alphabet))
+    if name == "physicochemical":
+        from .embedders.physicochemical import PhysicochemicalEmbedder
+
+        # Passed explicitly so a nucleotide run is refused rather than silently
+        # scored with amino acid scales.
+        return PhysicochemicalEmbedder(alphabet=cfg.get("alphabet", alphabet))
+    if name == "ctd":
+        from .embedders.ctd import CTDEmbedder
+
+        return CTDEmbedder(alphabet=cfg.get("alphabet", alphabet))
     if name == "kmer":
         from .embedders.kmer import KmerEmbedder
 
         return KmerEmbedder(k=cfg.get("k", 3), min_df=cfg.get("min_df", 1))
+    if name == "onehot":
+        from .embedders.onehot import OneHotEmbedder
+
+        return OneHotEmbedder(
+            max_len=cfg.get("max_len", 256),
+            alphabet=cfg.get("alphabet", alphabet),
+            truncate=cfg.get("truncate", "center"),
+        )
     if name == "esm2":
         from .embedders.esm import ESMEmbedder
 
@@ -247,6 +331,18 @@ def _build_embedder(cfg: dict[str, Any]) -> SequenceEmbedder:
             device=cfg.get("device"),
             batch_size=cfg.get("batch_size", 16),
             max_len=cfg.get("max_len", 512),
+        )
+    if name in ("hf", "huggingface"):
+        from .embedders.huggingface import HuggingFaceEmbedder
+
+        return HuggingFaceEmbedder(
+            model_name=cfg.get("model", "protbert"),
+            pooling=cfg.get("pooling", "mean"),
+            layer=cfg.get("layer", -1),
+            batch_size=cfg.get("batch_size", 8),
+            max_len=cfg.get("max_len", 1024),
+            device=cfg.get("device"),
+            trust_remote_code=cfg.get("trust_remote_code", False),
         )
     if name == "llm":
         from .embedders.llm import LLMEmbedder
@@ -259,7 +355,11 @@ def _build_embedder(cfg: dict[str, Any]) -> SequenceEmbedder:
             max_len=cfg.get("max_len", 512),
             output_dim=cfg.get("output_dim"),
         )
-    raise ValueError(f"Unknown embedder {name!r}. Choose from: composition, kmer, esm2, llm.")
+
+    raise ValueError(
+        f"Unknown embedder {name!r}. Choose from: composition, dipeptide, "
+        "physicochemical, ctd, kmer, onehot, esm2, hf, llm."
+    )
 
 
 def _reducer_configs(cfg: dict[str, Any]) -> list[dict[str, Any]]:
@@ -284,15 +384,29 @@ def _build_reducer(cfg: dict[str, Any]) -> DimReducer:
         If ``cfg["name"]`` is not a known reducer.
     """
     name = cfg["name"]
+    components = cfg.get("n_components", 2)
+
     if name == "pca":
         from .reduction.reducers import PCAReducer
 
-        return PCAReducer(n_components=cfg.get("n_components", 2))
+        return PCAReducer(n_components=components)
+    if name == "svd":
+        from .reduction.reducers import TruncatedSVDReducer
+
+        return TruncatedSVDReducer(n_components=components)
+    if name == "nmf":
+        from .reduction.reducers import NMFReducer
+
+        return NMFReducer(n_components=components, max_iter=cfg.get("max_iter", 500))
+    if name == "random_projection":
+        from .reduction.reducers import RandomProjectionReducer
+
+        return RandomProjectionReducer(n_components=components)
     if name == "umap":
         from .reduction.reducers import UMAPReducer
 
         return UMAPReducer(
-            n_components=cfg.get("n_components", 2),
+            n_components=components,
             n_neighbors=cfg.get("n_neighbors", 15),
             min_dist=cfg.get("min_dist", 0.1),
             metric=cfg.get("metric", "cosine"),
@@ -300,11 +414,54 @@ def _build_reducer(cfg: dict[str, Any]) -> DimReducer:
     if name == "tsne":
         from .reduction.reducers import TSNEReducer
 
-        return TSNEReducer(
-            n_components=cfg.get("n_components", 2),
-            perplexity=cfg.get("perplexity", 30),
+        return TSNEReducer(n_components=components, perplexity=cfg.get("perplexity", 30))
+    if name == "isomap":
+        from .reduction.reducers import IsomapReducer
+
+        return IsomapReducer(n_components=components, n_neighbors=cfg.get("n_neighbors", 10))
+    if name == "mds":
+        from .reduction.reducers import MDSReducer
+
+        return MDSReducer(n_components=components, n_init=cfg.get("n_init", 4))
+    if name == "spectral":
+        from .reduction.reducers import SpectralReducer
+
+        return SpectralReducer(n_components=components, n_neighbors=cfg.get("n_neighbors", 10))
+    if name == "lle":
+        from .reduction.reducers import LLEReducer
+
+        return LLEReducer(n_components=components, n_neighbors=cfg.get("n_neighbors", 10))
+    if name == "kernel_pca":
+        from .reduction.reducers import KernelPCAReducer
+
+        return KernelPCAReducer(
+            n_components=components,
+            kernel=cfg.get("kernel", "cosine"),
+            gamma=cfg.get("gamma"),
         )
-    raise ValueError(f"Unknown reducer {name!r}. Choose from: pca, umap, tsne.")
+    if name == "phate":
+        from .reduction.reducers import PHATEReducer
+
+        return PHATEReducer(
+            n_components=components,
+            knn=cfg.get("knn", 5),
+            decay=cfg.get("decay", 40),
+        )
+    if name == "pacmap":
+        from .reduction.reducers import PaCMAPReducer
+
+        return PaCMAPReducer(
+            n_components=components,
+            n_neighbors=cfg.get("n_neighbors", 10),
+            mn_ratio=cfg.get("mn_ratio", 0.5),
+            fp_ratio=cfg.get("fp_ratio", 2.0),
+        )
+
+    raise ValueError(
+        f"Unknown reducer {name!r}. Choose from: pca, svd, nmf, "
+        "random_projection, umap, tsne, isomap, mds, spectral, lle, "
+        "kernel_pca, phate, pacmap."
+    )
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -354,6 +511,7 @@ def _load_dataset(cfg: dict[str, Any]) -> ProteinDataset:
     min_length = data_cfg.get("min_seq_length", 50)
     max_per_family = data_cfg.get("max_per_family")
     random_state = data_cfg.get("random_state", 0)
+    alphabet = data_cfg.get("alphabet", "protein")
 
     fasta_cfg = cfg.get("fasta")
     if fasta_cfg:
@@ -370,6 +528,7 @@ def _load_dataset(cfg: dict[str, Any]) -> ProteinDataset:
                 min_length=min_length,
                 max_per_family=max_per_family,
                 random_state=random_state,
+                alphabet=alphabet,
             )
 
     pfam_cfg = cfg["pfam"]
@@ -386,6 +545,7 @@ def _load_dataset(cfg: dict[str, Any]) -> ProteinDataset:
         min_length=min_length,
         max_per_family=max_per_family,
         random_state=random_state,
+        alphabet=alphabet,
     )
 
 
@@ -465,13 +625,21 @@ def main() -> None:
     print_config_summary(cfg, dataset)
 
     try:
-        embedders = [_build_embedder(e) for e in cfg["embedders"]]
+        embedders = [_build_embedder(e, dataset.alphabet) for e in cfg["embedders"]]
         reducers = [_build_reducer(r) for r in _reducer_configs(cfg)]
     except (ValueError, KeyError) as exc:
         _fail(str(exc), "configs/default.yaml documents every option.")
 
     results_dir = Path(cfg.get("results_dir", "results"))
     metric_params = dict(cfg.get("metrics") or {})
+    # `groups:` reads better in YAML than `metric_groups:`, but the keyword on
+    # evaluate() has to be unambiguous about what it groups.
+    if "groups" in metric_params:
+        metric_params["metric_groups"] = metric_params.pop("groups")
+    try:
+        resolve_groups(metric_params.get("metric_groups"))
+    except ValueError as exc:
+        _fail(str(exc), "See the `metrics:` block in configs/default.yaml.")
     start_time = time.time()
 
     with Progress(
@@ -493,6 +661,7 @@ def main() -> None:
             metric_params=metric_params,
         )
         task = progress.add_task("Starting...", total=run_cfg.n_steps)
+        skipped_pairs: list[tuple[str, str]] = []
 
         def on_progress(event: str, payload: dict[str, Any]) -> None:
             name = str(payload.get("name", ""))
@@ -520,6 +689,11 @@ def main() -> None:
                     ),
                 )
                 progress.advance(task)
+            elif event == "pair_skipped":
+                # A reduce-stage skip never reached reduce_done, so two steps
+                # are outstanding; an evaluate-stage skip leaves one.
+                progress.advance(task, 2 if payload.get("stage") == "reduce" else 1)
+                skipped_pairs.append((f"{name}+{reducer_name}", str(payload.get("reason", ""))))
 
         run_cfg.on_progress = on_progress
         try:
@@ -537,7 +711,26 @@ def main() -> None:
     elapsed = time.time() - start_time
     baseline = float(dataset.summary()["majority_class_fraction"])  # type: ignore[arg-type]
     print_results_table(results, baseline=baseline)
+    print_skipped_pairs(skipped_pairs)
     print_footer(elapsed, results_dir)
+
+
+def print_skipped_pairs(skipped: list[tuple[str, str]]) -> None:
+    """Report pairs that could not be scored, and why.
+
+    Some combinations are simply invalid -- NMF cannot factorise a signed
+    embedding, a manifold method can fail on a disconnected neighbour graph.
+    The run continues without them, but a quietly missing row in a benchmark
+    table invites the wrong conclusion, so each omission is named here.
+    """
+    if not skipped:
+        return
+    console.print(f"  [yellow]{len(skipped)} pair(s) skipped:[/yellow]")
+    for method, reason in skipped:
+        first_line = reason.strip().splitlines()[0]
+        trimmed = first_line if len(first_line) <= 96 else first_line[:93] + "..."
+        console.print(f"    [dim]{method}[/dim] - {trimmed}")
+    console.print()
 
 
 # ---------------------------------------------------------------------------

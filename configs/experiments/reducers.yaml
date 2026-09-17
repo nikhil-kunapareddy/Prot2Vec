@@ -1,10 +1,18 @@
 # Which projection should you trust?
 #
-# One embedder, three reducers. Because the embedding is computed once and
-# reused, this costs barely more than a single-reducer run — and it shows
-# directly how much of a clustered-looking figure comes from the reducer
-# rather than from the representation. Watch `trustworthiness` alongside
-# `kNN 2-D`: UMAP often wins the picture and loses the honesty.
+# One embedder, eight reducers. Because a run computes each embedding once and
+# reuses it, this costs barely more than a single-reducer run — and it shows
+# directly how much of a clustered-looking figure comes from the reducer rather
+# than from the representation.
+#
+# Read three columns together:
+#   trustworthiness       did the projection invent structure?
+#   continuity            did it destroy structure?
+#   distance_correlation  did it preserve distances *between* clusters?
+#
+# `random_projection` is the control. It fits nothing, so whatever structure
+# survives it was robust to begin with — and any reducer that does not clearly
+# beat it is not earning its place.
 pfam:
   version: "35.0"
   families:
@@ -26,10 +34,22 @@ embedders:
     k: 3
 
 reducers:
+  # Linear, deterministic
   - name: pca
+  - name: svd               # LSA; consumes the sparse matrix directly
+  - name: random_projection # the control
+  # Manifold
   - name: umap
     n_neighbors: 15
     min_dist: 0.1
     metric: cosine
   - name: tsne
     perplexity: 30
+  - name: isomap            # geodesic; keeps global structure
+    n_neighbors: 10
+  - name: mds               # literal picture of the distance matrix
+  - name: kernel_pca        # non-linear but deterministic
+    kernel: cosine
+
+metrics:
+  groups: [projection, classification, clustering]

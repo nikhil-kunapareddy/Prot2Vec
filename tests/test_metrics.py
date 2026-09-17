@@ -5,19 +5,49 @@ import pytest
 
 from prot2vec.evaluation.metrics import compute_trustworthiness, evaluate, knn_cv_accuracy
 
-#: Label-dependent metrics that do not depend on the `knn_space` setting.
+#: Metrics reported regardless of the `knn_space` setting, when the confound
+#: group is unavailable (no sequences supplied).
 ALWAYS_REPORTED = frozenset(
     {
+        # projection
         "trustworthiness",
+        "continuity",
+        "neighborhood_preservation",
+        "lcmc",
+        "distance_correlation",
+        # retrieval
+        "precision_at_k",
+        "mean_average_precision",
+        "r_precision",
+        "same_class_auroc",
+        # clustering
         "silhouette",
         "silhouette_2d",
-        "precision_at_k",
         "adjusted_rand",
         "normalized_mutual_info",
+        "homogeneity",
+        "completeness",
+        "v_measure",
+        "fowlkes_mallows",
+        "davies_bouldin",
+        "calinski_harabasz",
     }
 )
 KNN_LOW = frozenset({"knn_accuracy_mean", "knn_accuracy_std"})
-KNN_HIGH = frozenset({"knn_accuracy_highdim_mean", "knn_accuracy_highdim_std"})
+KNN_HIGH = frozenset(
+    {
+        "knn_accuracy_highdim_mean",
+        "knn_accuracy_highdim_std",
+        "knn_f1_macro",
+        "knn_balanced_accuracy",
+        "knn_mcc",
+        "knn_cohen_kappa",
+        "knn_auroc",
+    }
+)
+CONFOUND = frozenset(
+    {"length_distance_rho", "composition_distance_rho", "length_only_knn_accuracy"}
+)
 
 
 def _make_data(n: int = 40, d_high: int = 10, d_low: int = 2, seed: int = 0):
@@ -126,13 +156,13 @@ class TestKnnCvAccuracy:
 
     def test_single_family_raises(self):
         X, _ = _two_clusters()
-        with pytest.raises(ValueError, match="at least two families"):
+        with pytest.raises(ValueError, match="at least two classes"):
             knn_cv_accuracy(X, ["A"] * X.shape[0])
 
     def test_singleton_family_raises(self):
         # A family of one cannot appear in both a train and a test fold.
         X = np.vstack([np.zeros((1, 2)), np.ones((20, 2))])
-        with pytest.raises(ValueError, match="at least two families"):
+        with pytest.raises(ValueError, match="at least two classes"):
             knn_cv_accuracy(X, ["A"] + ["B"] * 20)
 
     def test_label_count_mismatch_raises(self):

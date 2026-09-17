@@ -11,35 +11,13 @@ from pathlib import Path
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
 
+from .alphabets import PROTEIN, Alphabet, clean_sequence, get_alphabet
+
 logger = logging.getLogger(__name__)
 
-#: The 20 standard amino acids. Everything else -- alignment gaps (``-``,
-#: ``.``), the ambiguity codes ``B``/``Z``/``J``/``X``, and the non-canonical
-#: residues ``U`` (selenocysteine) and ``O`` (pyrrolysine) -- is removed during
-#: loading, because embedders disagree on how to tokenise them and the choice
-#: would otherwise silently differ between methods being compared.
-STANDARD_AAS = frozenset("ACDEFGHIKLMNPQRSTVWY")
-
-
-def clean_sequence(sequence: str) -> str:
-    """Strip everything that is not one of the 20 standard amino acids.
-
-    Parameters
-    ----------
-    sequence
-        Raw sequence, possibly gapped and in mixed case.
-
-    Returns
-    -------
-    str
-        Uppercase sequence containing only standard residues.
-
-    Examples
-    --------
-    >>> clean_sequence("mkt-AY..iX")
-    'MKTAYI'
-    """
-    return "".join(c for c in sequence.upper() if c in STANDARD_AAS)
+#: The 20 standard amino acids, re-exported from :mod:`prot2vec.data.alphabets`
+#: where the other alphabets live.
+STANDARD_AAS = PROTEIN.token_set
 
 
 @dataclass
@@ -66,12 +44,18 @@ class ProteinDataset:
     source
         Human-readable description of where the data came from, recorded in run
         manifests for provenance.
+    alphabet
+        Name of the alphabet the sequences were cleaned against
+        (``"protein"``, ``"dna"`` or ``"rna"``). Embedders consult it, and
+        protein-only descriptors refuse to run on nucleotides rather than
+        returning a meaningless vector.
     """
 
     sequences: list[str]
     labels: list[str]
     ids: list[str]
     source: str = field(default="unknown")
+    alphabet: str = field(default=PROTEIN.name)
 
     def __post_init__(self) -> None:
         """Validate that the parallel lists line up.
@@ -87,6 +71,13 @@ class ProteinDataset:
                 "sequences, labels and ids must be the same length, got "
                 f"{len(self.sequences)}, {len(self.labels)}, {len(self.ids)}."
             )
+        # Fail here rather than deep inside an embedder.
+        get_alphabet(self.alphabet)
+
+    @property
+    def alphabet_spec(self) -> Alphabet:
+        """The resolved :class:`~prot2vec.data.alphabets.Alphabet`."""
+        return get_alphabet(self.alphabet)
 
     # ------------------------------------------------------------------
     # Constructors
@@ -99,6 +90,7 @@ class ProteinDataset:
         min_length: int = 50,
         max_per_family: int | None = None,
         random_state: int = 0,
+        alphabet: str | Alphabet = PROTEIN,
     ) -> ProteinDataset:
         """Build a dataset from parsed Pfam seed alignments.
 
@@ -119,12 +111,16 @@ class ProteinDataset:
             chance baseline.
         random_state
             Seed for the subsampling, so a capped dataset is reproducible.
+        alphabet
+            Token set to clean against. Pfam is protein, so this is almost
+            always the default.
 
         Returns
         -------
         ProteinDataset
             The assembled dataset.
         """
+        resolved = get_alphabet(alphabet)
         sequences: list[str] = []
         labels: list[str] = []
         ids: list[str] = []
@@ -133,7 +129,7 @@ class ProteinDataset:
         for family, records in records_by_family.items():
             kept: list[tuple[str, str]] = []
             for record in records:
-                cleaned = clean_sequence(str(record.seq))
+                cleaned = clean_sequence(str(record.seq), resolved)
                 if len(cleaned) >= min_length:
                     kept.append((cleaned, str(record.id)))
 
@@ -161,6 +157,7 @@ class ProteinDataset:
             labels=labels,
             ids=_unique_ids(ids),
             source=f"pfam:{','.join(sorted(records_by_family))}",
+            alphabet=resolved.name,
         )
 
     @classmethod
@@ -171,6 +168,7 @@ class ProteinDataset:
         min_length: int = 50,
         max_per_family: int | None = None,
         random_state: int = 0,
+        alphabet: str | Alphabet = PROTEIN,
     ) -> ProteinDataset:
         """Load sequences from a FASTA file, deriving labels from the headers.
 
@@ -204,6 +202,12 @@ class ProteinDataset:
             Cap each group at this many sequences.
         random_state
             Seed for the subsampling.
+        alphabet
+            Token set to clean against: ``"protein"`` (default), ``"dna"`` or
+            ``"rna"``. Set this correctly -- nucleotide sequences cleaned
+            against the protein alphabet are silently mangled rather than
+            rejected, because ``A``, ``C``, ``G``, ``T`` and ``N`` are all
+            valid amino acid codes.
 
         Returns
         -------
@@ -222,11 +226,12 @@ class ProteinDataset:
         if not path.exists():
             raise FileNotFoundError(f"FASTA file not found: {path}")
 
+        resolved = get_alphabet(alphabet)
         grouped: dict[str, list[tuple[str, str]]] = {}
         total = 0
         for record in _iter_fasta(path):
             total += 1
-            cleaned = clean_sequence(str(record.seq))
+            cleaned = clean_sequence(str(record.seq), resolved)
             if len(cleaned) < min_length:
                 continue
             label = _label_from_record(record, label_from)
@@ -235,8 +240,9 @@ class ProteinDataset:
         if not grouped:
             raise ValueError(
                 f"No usable sequences in {path}: read {total} record(s), none of "
-                f"which had at least {min_length} standard residues. Lower "
-                "min_seq_length, or check the file is protein rather than nucleotide."
+                f"which had at least {min_length} {resolved.name} tokens. Lower "
+                f"min_seq_length, or check the alphabet -- {resolved.name} was "
+                "requested."
             )
 
         rng = random.Random(random_state)
@@ -264,6 +270,7 @@ class ProteinDataset:
             labels=labels,
             ids=_unique_ids(ids),
             source=f"fasta:{path.name}",
+            alphabet=resolved.name,
         )
 
     # ------------------------------------------------------------------
@@ -316,6 +323,7 @@ class ProteinDataset:
             "length_max": max(lengths) if lengths else 0,
             "majority_class_fraction": (max(counts.values()) / len(self)) if counts else 0.0,
             "source": self.source,
+            "alphabet": self.alphabet,
         }
 
     def to_fasta(self, path: str | Path) -> Path:
@@ -441,3 +449,9 @@ def _label_from_record(record: SeqRecord, label_from: str) -> str:
         f"Unknown label_from {label_from!r}. Choose from 'first_token', "
         "'last_token', 'description', 'pipe:N' or 'none'."
     )
+
+
+#: Alias for :class:`ProteinDataset`. The container is alphabet-aware and works
+#: for nucleotide sequences too, so this name is available where "protein"
+#: would be misleading. The original name is kept for backwards compatibility.
+SequenceDataset = ProteinDataset

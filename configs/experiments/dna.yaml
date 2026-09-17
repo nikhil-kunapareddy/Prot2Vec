@@ -1,0 +1,46 @@
+# Nucleotide sequences.
+#
+# Prot2Vec is not protein-only: set `data.alphabet` and the alphabet-aware
+# embedders switch to a 4-token vocabulary. Dipeptide composition becomes
+# 16 dinucleotide frequencies, one-hot becomes 4 channels per position, and
+# k-mer TF-IDF picks up motifs directly.
+#
+# `alphabet: dna` is not optional here. A, C, G, T and N are all valid amino
+# acid codes, so nucleotide sequences cleaned against the protein alphabet are
+# silently mangled instead of rejected.
+#
+# The physicochemical and CTD descriptors are amino acid scales and will refuse
+# to run on this config, by design.
+fasta:
+  path: data/my_sequences.fasta
+  label_from: first_token
+
+data:
+  alphabet: dna
+  min_seq_length: 100
+  max_per_family: null
+  random_state: 0
+
+results_dir: results
+cache_embeddings: true
+save_figures: true
+
+embedders:
+  - name: composition       # 4 base frequencies
+  - name: dipeptide         # 16 dinucleotide frequencies
+  - name: kmer
+    k: 6                    # hexamers are the usual choice for regulatory motifs
+    min_df: 2
+  - name: onehot
+    max_len: 200
+  # Needs: pip install "prot2vec[hf]" — and trust_remote_code for DNABERT-2.
+  # - name: hf
+  #   model: dnabert2
+  #   trust_remote_code: true
+  #   batch_size: 8
+
+reducers:
+  - name: svd               # the right linear reducer for sparse k-mer input
+  - name: umap
+    n_neighbors: 15
+    metric: cosine

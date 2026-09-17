@@ -201,3 +201,89 @@ class TestEmbedderContract:
 
     def test_repr(self):
         assert repr(CompositionEmbedder()) == "CompositionEmbedder(name='composition')"
+
+
+class TestHuggingFaceEmbedderConfig:
+    """Configuration only — running a checkpoint needs [hf] and weights."""
+
+    def test_presets_resolve_to_hub_ids(self):
+        from prot2vec.embedders.huggingface import PRESETS, HuggingFaceEmbedder
+
+        assert HuggingFaceEmbedder("protbert").repo_id == PRESETS["protbert"]
+        assert HuggingFaceEmbedder("prott5").repo_id.startswith("Rostlab/")
+
+    def test_raw_hub_id_passes_through(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        assert HuggingFaceEmbedder("facebook/esm2_t6_8M_UR50D").repo_id == (
+            "facebook/esm2_t6_8M_UR50D"
+        )
+
+    def test_presets_cover_the_major_families(self):
+        from prot2vec.embedders.huggingface import PRESETS
+
+        for expected in ("protbert", "prott5", "ankh_base", "esm2_650m", "dnabert2"):
+            assert expected in PRESETS
+
+    def test_name_encodes_pooling_and_layer(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        assert HuggingFaceEmbedder("protbert").name == "hf_prot_bert_mean"
+        assert HuggingFaceEmbedder("protbert", pooling="cls").name == "hf_prot_bert_cls"
+        assert HuggingFaceEmbedder("protbert", layer=-4).name == "hf_prot_bert_mean_L-4"
+
+    def test_rostlab_models_get_space_separated_residues(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        embedder = HuggingFaceEmbedder("protbert")
+        embedder._space_separated = True
+        assert embedder._prepare(["MKT"]) == ["M K T"]
+
+    def test_esm_models_are_not_space_separated(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        embedder = HuggingFaceEmbedder("esm2_35m")
+        assert embedder._prepare(["mkt"]) == ["MKT"]
+
+    def test_prostt5_gets_its_direction_token(self):
+        # ProstT5 is bilingual over sequence and structure alphabets and has to
+        # be told which one it is being given.
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        embedder = HuggingFaceEmbedder("prostt5")
+        embedder._space_separated = True
+        assert embedder._prepare(["MKT"]) == ["<AA2fold> M K T"]
+
+    def test_trust_remote_code_is_off_by_default(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        assert HuggingFaceEmbedder("dnabert2").trust_remote_code is False
+
+    @pytest.mark.parametrize("kwargs", [{"pooling": "sum"}, {"batch_size": 0}, {"max_len": 1}])
+    def test_invalid_config_rejected(self, kwargs):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        with pytest.raises(ValueError):
+            HuggingFaceEmbedder(**kwargs)
+
+    def test_cache_key_separates_pooling_and_layer(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        keys = {
+            HuggingFaceEmbedder("protbert").cache_key,
+            HuggingFaceEmbedder("protbert", pooling="cls").cache_key,
+            HuggingFaceEmbedder("protbert", layer=-4).cache_key,
+            HuggingFaceEmbedder("prott5").cache_key,
+        }
+        assert len(keys) == 4
+
+    def test_device_unresolved_before_loading(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        assert HuggingFaceEmbedder("protbert").device is None
+
+    def test_empty_input_rejected_before_downloading_weights(self):
+        from prot2vec.embedders.huggingface import HuggingFaceEmbedder
+
+        with pytest.raises(ValueError, match="No sequences"):
+            HuggingFaceEmbedder("protbert").fit_transform([])

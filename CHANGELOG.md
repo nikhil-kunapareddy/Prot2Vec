@@ -6,6 +6,87 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0]
+
+Breadth release: nine representations, thirteen projections, thirty-one
+metrics, and support for nucleotide as well as protein sequences.
+
+### Added
+
+- **Sequence alphabets.** `data.alphabet` accepts `protein`, `dna` or `rna`,
+  and the alphabet-aware embedders switch vocabulary accordingly — dipeptide
+  composition becomes 16 dinucleotide frequencies, one-hot becomes four
+  channels per position. `SequenceDataset` is available as an alias for
+  `ProteinDataset`, which is alphabet-aware rather than protein-specific.
+  Setting this matters: `A`, `C`, `G`, `T` and `N` are all valid amino acid
+  codes, so nucleotide sequences cleaned against the protein alphabet were
+  silently mangled rather than rejected.
+- **Five new embedders.** `dipeptide` (fixed-order adjacent-pair frequencies),
+  `physicochemical` (23 features with physical units), `ctd`
+  (composition/transition/distribution over seven property groups), `onehot`
+  (positional, sparse), and `hf` — one class covering ProtBERT, ProtT5, Ankh,
+  ProstT5, the ESM-2 Hugging Face ports, DNABERT-2 and the Nucleotide
+  Transformer, with mean/CLS/max pooling and selectable hidden layer.
+- **Ten new reducers.** `svd`, `nmf`, `random_projection`, `isomap`, `mds`,
+  `spectral`, `lle`, `kernel_pca`, plus optional `phate` and `pacmap`.
+  `random_projection` is a deliberate control: it fits nothing, so structure
+  that survives it was robust to begin with.
+- **Twenty-one new metrics**, organised into five selectable groups via
+  `metrics.groups`:
+  - `projection` adds continuity, neighbourhood preservation, LCMC and
+    Shepard-diagram distance correlation.
+  - `classification` adds macro F1, balanced accuracy, MCC, Cohen's kappa and
+    one-vs-rest AUROC, because accuracy alone rewards ignoring small classes.
+  - `retrieval` adds mean average precision, R-precision and same-class AUROC
+    (the remote-homology framing, insensitive to class imbalance).
+  - `clustering` adds homogeneity, completeness, V-measure, Fowlkes-Mallows,
+    Davies-Bouldin and Calinski-Harabasz.
+  - `confound` is new: `length_only_knn_accuracy` reports the accuracy
+    reachable from sequence length alone, alongside length/distance and
+    composition/distance correlations. The CLI warns when a result is
+    explained by either.
+- New extras: `[hf]`, `[phate]`, `[pacmap]` and `[all]`.
+- New presets: `descriptors.yaml`, `plm.yaml`, `dna.yaml`; `reducers.yaml` now
+  compares eight projections.
+- 411 tests (up from 208) at 84% coverage.
+
+### Changed
+
+- The `evaluation` module became a package — `projection`, `classification`,
+  `retrieval`, `clustering`, `confound` and `suite`. Every previous import path
+  still works; `prot2vec.evaluation.metrics` re-exports the full surface.
+- `evaluate()` takes `sequences`, `metric_groups` and `alphabet`. The pipeline
+  supplies the first and last automatically, which is what makes the confound
+  group possible — "is this just encoding length?" cannot be answered from the
+  vectors alone.
+- The results table shows five columns instead of eight and one line per row;
+  a full run can produce sixty rows, which no terminal renders legibly. The CSV
+  is unchanged and carries every metric.
+- `clustering_report()` supersedes `clustering_agreement()`, which remains as a
+  two-tuple wrapper.
+
+### Fixed
+
+- **One invalid pair no longer aborts the whole matrix.** NMF rejects signed
+  input, a manifold method can fail on a disconnected neighbour graph, an
+  optional backend may be missing — previously any of these discarded every
+  pair that had already succeeded. Failures are now isolated per pair, named in
+  the output, and recorded under `skipped_pairs` in the run manifest. A run
+  still raises if *every* pair fails.
+- **The protein-only descriptors did not receive the dataset alphabet**, so a
+  nucleotide run with `physicochemical` or `ctd` would have scored DNA with
+  amino acid scales instead of refusing.
+- **Coverage silently hid whole functions.** The `exclude_lines` pattern for
+  abstract-method ellipsis bodies was unanchored, so it also matched
+  `tuple[str, ...]` in a type annotation and excluded that function's entire
+  body — `evaluate()` among them. Now anchored to a line containing only `...`.
+- `MDS` pins `init="random"` where the parameter exists, so scikit-learn's
+  upcoming default change cannot silently move published numbers.
+- Removed a duplicated `_as_dense` helper; the dense/sparse conversions now
+  live once in `prot2vec._matrix` alongside the `EmbeddingMatrix` type alias,
+  which replaced the `np.ndarray` annotations that sparse embedders were
+  contradicting with `# type: ignore`.
+
 ## [0.2.0]
 
 A correctness and usability release. The import path changed, so this is a
@@ -105,6 +186,7 @@ Initial release: amino acid composition, k-mer TF-IDF, ESM-2 and Google Gemini
 embedders; PCA, UMAP and t-SNE reducers; trustworthiness and 5-NN accuracy
 metrics; YAML-driven experiments and a rich CLI.
 
-[Unreleased]: https://github.com/nikhil-kunapareddy/Prot2Vec/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nikhil-kunapareddy/Prot2Vec/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nikhil-kunapareddy/Prot2Vec/releases/tag/v0.3.0
 [0.2.0]: https://github.com/nikhil-kunapareddy/Prot2Vec/releases/tag/v0.2.0
 [0.1.0]: https://github.com/nikhil-kunapareddy/Prot2Vec/releases/tag/v0.1.0

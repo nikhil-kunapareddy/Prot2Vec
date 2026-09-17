@@ -227,3 +227,152 @@ class TestFigures:
         figures = base_config.results_dir / "figures"
         assert (figures / "constant_pca.png").exists()
         assert (figures / "metrics_summary.png").exists()
+
+
+class FailingReducer:
+    """A reducer that always fails, to prove one bad cell does not sink the run."""
+
+    @property
+    def name(self) -> str:
+        return "failing"
+
+    @property
+    def params(self) -> dict:
+        return {}
+
+    def fit_transform(self, X):
+        raise ValueError("this reducer always fails")
+
+
+class TestPairFailureIsolation:
+    def test_one_failing_reducer_does_not_abort_the_matrix(self, two_family_dataset, tmp_path):
+        # NMF on a signed embedding, or a missing optional backend, is a
+        # property of one cell -- the other pairs have already succeeded and
+        # must still be reported.
+        from prot2vec.reduction.reducers import DimReducer
+
+        DimReducer.register(FailingReducer)
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[PCAReducer(), FailingReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+        )
+        results = run(config)
+        assert len(results) == 1
+        assert list(results["reducer"]) == ["pca"]
+
+    def test_skipped_pairs_are_recorded_in_the_manifest(self, two_family_dataset, tmp_path):
+        from prot2vec.reduction.reducers import DimReducer
+
+        DimReducer.register(FailingReducer)
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[PCAReducer(), FailingReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+        )
+        run(config)
+        manifest = json.loads((tmp_path / "results" / "run_manifest.json").read_text())
+        assert len(manifest["skipped_pairs"]) == 1
+        skipped = manifest["skipped_pairs"][0]
+        assert skipped["method"] == "constant+failing"
+        assert skipped["stage"] == "reduce"
+        assert "always fails" in skipped["reason"]
+
+    def test_nmf_on_signed_embedding_is_skipped_not_fatal(self, two_family_dataset, tmp_path):
+        from prot2vec.reduction.reducers import NMFReducer
+
+        # ConstantEmbedder emits counts, so make one column negative.
+        class SignedEmbedder(ConstantEmbedder):
+            def fit_transform(self, sequences):
+                return super().fit_transform(sequences) - 100.0
+
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[SignedEmbedder(tag="signed")],
+            reducers=[PCAReducer(), NMFReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+        )
+        results = run(config)
+        assert list(results["reducer"]) == ["pca"]
+
+    def test_all_pairs_failing_raises(self, two_family_dataset, tmp_path):
+        from prot2vec.reduction.reducers import DimReducer
+
+        DimReducer.register(FailingReducer)
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[FailingReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+        )
+        with pytest.raises(RuntimeError, match=r"Every .* pair failed"):
+            run(config)
+
+
+class TestMetricGroupSelection:
+    def test_groups_narrow_the_columns(self, two_family_dataset, tmp_path):
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[PCAReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+            metric_params={"metric_groups": ["retrieval"]},
+        )
+        results = run(config)
+        assert "precision_at_k" in results.columns
+        assert "trustworthiness" not in results.columns
+
+    def test_confound_group_runs_because_sequences_are_supplied(self, two_family_dataset, tmp_path):
+        # The pipeline has the dataset, so it can answer "is this just length?"
+        # even though evaluate() cannot do so from the vectors alone.
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[PCAReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+            metric_params={"metric_groups": ["confound"]},
+        )
+        results = run(config)
+        assert "length_only_knn_accuracy" in results.columns
+
+    def test_dna_alphabet_reaches_the_confound_metrics(self, tmp_path):
+        from prot2vec.data.dataset import ProteinDataset
+
+        rng = np.random.default_rng(0)
+        sequences = ["".join(rng.choice(list("ACGT"), 100)) for _ in range(20)]
+        dataset = ProteinDataset(
+            sequences=sequences,
+            labels=["A"] * 10 + ["B"] * 10,
+            ids=[f"s{i}" for i in range(20)],
+            alphabet="dna",
+        )
+        config = RunConfig(
+            dataset=dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[PCAReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+            metric_params={"metric_groups": ["confound"]},
+        )
+        results = run(config)
+        assert "composition_distance_rho" in results.columns
+
+    def test_manifest_records_the_alphabet(self, two_family_dataset, tmp_path):
+        config = RunConfig(
+            dataset=two_family_dataset,
+            embedders=[ConstantEmbedder()],
+            reducers=[PCAReducer()],
+            results_dir=tmp_path / "results",
+            save_figures=False,
+        )
+        run(config)
+        manifest = json.loads((tmp_path / "results" / "run_manifest.json").read_text())
+        assert manifest["dataset"]["alphabet"] == "protein"

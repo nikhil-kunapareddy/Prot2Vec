@@ -33,6 +33,8 @@ prot2vec-benchmark --config configs/experiments/quick.yaml
 - [Benchmark your own sequences](#benchmark-your-own-sequences)
 - [The methods](#the-methods)
 - [The metrics, and how to read them](#the-metrics-and-how-to-read-them)
+- [The projections](#the-projections)
+- [Non-protein sequences](#non-protein-sequences)
 - [What a run produces](#what-a-run-produces)
 - [Configuration](#configuration)
 - [Library use](#library-use)
@@ -48,11 +50,12 @@ prot2vec-benchmark --config configs/experiments/quick.yaml
 
 | | |
 |---|---|
-| **Four representations** | amino acid composition, k-mer TF-IDF, ESM-2 protein language models, general-purpose LLM embedding APIs |
-| **Three projections** | PCA, UMAP, t-SNE — compared on identical vectors |
-| **Seven metrics** | family separability in full and reduced space, homology-retrieval precision, silhouette, unsupervised cluster agreement, projection trustworthiness |
+| **Nine representations** | composition, dipeptide composition, physicochemical profiles, CTD descriptors, k-mer TF-IDF, positional one-hot, ESM-2, any Hugging Face encoder (ProtBERT, ProtT5, Ankh, ProstT5, DNABERT), general-purpose LLM APIs |
+| **Thirteen projections** | PCA, truncated SVD, NMF, random projection, UMAP, t-SNE, Isomap, MDS, spectral, LLE, kernel PCA, PHATE, PaCMAP — all compared on identical vectors |
+| **Thirty-one metrics** | in five groups: projection fidelity, classification, retrieval, clustering, and confound diagnostics |
+| **Protein, DNA or RNA** | alphabet-aware throughout, so the toolkit is not silently protein-only |
 | **Two data sources** | curated Pfam seed alignments, or your own FASTA |
-| **Honest baselines** | every score is printed next to the majority-class fraction, so "0.62 accuracy" can be read as what it is |
+| **Honest baselines** | every score sits next to the majority-class fraction *and* the accuracy reachable from sequence length alone |
 | **Usable outputs** | embeddings, 2-D coordinates and the exact input sequences, all id-aligned as plain `.npy`/`.tsv`, plus a provenance manifest |
 
 Embeddings are computed **once per method** and reused across every reducer, so
@@ -69,14 +72,17 @@ cd Prot2Vec
 
 python -m venv .venv && source .venv/bin/activate
 
-pip install -e ".[dev]"              # composition + k-mer + all metrics
-pip install -e ".[esm,dev]"          # + ESM-2 (pulls in PyTorch, ~2 GB)
+pip install -e ".[dev]"              # six descriptors, eleven reducers, all metrics
+pip install -e ".[esm,dev]"          # + ESM-2 via fair-esm (PyTorch, ~2 GB)
+pip install -e ".[hf,dev]"           # + ProtBERT / ProtT5 / Ankh / DNABERT
 pip install -e ".[llm,dev]"          # + Google Gemini embedding API
-pip install -e ".[esm,llm,dev]"      # everything
+pip install -e ".[phate,pacmap,dev]" # + the two optional reducers
+pip install -e ".[all,dev]"          # everything
 ```
 
-The base install has no deep-learning dependency — composition, k-mer, all
-three reducers and all metrics work without PyTorch.
+The base install has no deep-learning dependency. Six of the nine
+representations, eleven of the thirteen reducers and **all thirty-one metrics**
+work without PyTorch.
 
 ## Quick start
 
@@ -168,8 +174,13 @@ condition, cluster assignment from another tool.
 | Method | Type | Dimensions | Needs |
 |---|---|---|---|
 | `composition` | residue frequency vector | 20 | — |
+| `dipeptide` | adjacent-pair frequencies, fixed order | 400 | — |
+| `physicochemical` | hydropathy, charge, polarity, volume, weight | 23 | — |
+| `ctd` | composition / transition / distribution | 147 | — |
 | `kmer` | TF-IDF over residue k-mers | up to 20ᵏ, sparse | — |
+| `onehot` | positional one-hot | `max_len` × 20, sparse | — |
 | `esm2` | mean-pooled protein language model | 320 / 480 / 640 / 1280 | `[esm]` |
+| `hf` | any Hugging Face encoder | model-dependent | `[hf]` |
 | `llm` | general-purpose text embedding API | model-dependent | `[llm]` + API key |
 
 **`composition`** discards residue order entirely. Any separation it achieves
@@ -177,14 +188,50 @@ comes from compositional bias alone — hydrophobic membrane domains separate
 from soluble enzymes without any model learning anything about structure. It is
 the floor a protein language model has to beat to have earned its GPU time.
 
+**`dipeptide`** adds first-order order information in a *fixed* layout: column
+`i × 20 + j` is always the frequency of residue `i` followed by residue `j`.
+Unlike k-mer TF-IDF, whose vocabulary is learned from the corpus, these columns
+mean the same thing in every run, so vectors are comparable across datasets and
+individual features can be plotted.
+
+**`physicochemical`** is the only representation whose features have units:
+hydropathy, charge, polarity, volume and molecular weight, each as mean,
+standard deviation, minimum and maximum, plus length and aromatic/charged
+fractions. If two families split on `hydropathy_mean`, one is more hydrophobic
+than the other — a claim a reviewer can check. At 23 dimensions it also cannot
+overfit a small seed alignment the way an 8,000-column k-mer matrix can.
+
+**`ctd`** asks three questions of each of seven chemical properties: how much of
+each residue class is present (composition), how often the sequence switches
+between classes (transition), and *where along the sequence* each class
+accumulates (distribution). The third is what makes it distinctive — positions
+are expressed as fractions of length, so it captures "the hydrophobic residues
+are concentrated in the C-terminal third" in a way that survives differences in
+sequence length.
+
 **`kmer`** keeps local order, so short conserved motifs contribute. TF-IDF
 down-weights k-mers that appear everywhere. Often a surprisingly strong
 baseline on seed alignments, where family members share recognisable motifs.
+
+**`onehot`** throws nothing away: position *p* holding residue *t* is its own
+feature. It is the input format CNNs are trained on, and a useful upper
+reference. The catch is that it is not alignment-free — feature `p × 20 + t`
+only means the same thing across two sequences if position *p* is comparable in
+both, which for unaligned proteins of different lengths it generally is not.
 
 **`esm2`** is the reference point: a transformer pretrained on UniRef that has
 seen no Pfam labels. Residue representations are mean-pooled over the sequence.
 Checkpoints range from 8M to 650M parameters (`esm2_t6_8M` through
 `esm2_t33_650M`).
+
+**`hf`** covers most of the rest of the field through one class. Presets include
+`protbert`, `protbert_bfd`, `prott5`, `prott5_bfd`, `prostt5`, `ankh_base`,
+`ankh_large`, the `esm2_*` Hugging Face ports, `dnabert2` and
+`nucleotide_transformer` — or pass any Hub model id. Pooling is `mean`, `cls` or
+`max`, and `layer` selects which hidden layer to pool, since intermediate layers
+often transfer better than the final one. Encoder-decoder checkpoints (ProtT5,
+Ankh, ProstT5) load their encoder only, and each family's tokeniser conventions
+are handled for you.
 
 **`llm`** sends the raw residue letters to a text embedding model as if they
 were prose. This is a **control, not a protein method** — read its score as a
@@ -199,30 +246,132 @@ Every metric is reported for every `(embedder, reducer)` pair. All except
 embedding, because that is the representation under test — scoring only the 2-D
 projection grades the reducer instead.
 
-| Metric | Question | Range |
+Thirty-one metrics in five groups. Select them with `metrics.groups` in the
+config; the terminal shows five headline columns and `benchmark.csv` carries
+every one.
+
+**`projection`** — did the reducer preserve the structure, or create it?
+
+| Metric | Question |
+|---|---|
+| `trustworthiness` | Do points that *look* close really neighbour each other? Catches invented structure. |
+| `continuity` | Do points that really are close still look close? Catches destroyed structure. |
+| `neighborhood_preservation` | What fraction of true k-nearest neighbours survive? Directly interpretable. |
+| `lcmc` | The same, minus the overlap a random projection would score. |
+| `distance_correlation` | Shepard-diagram rho. Are distances *between* clusters preserved? |
+
+**`classification`** — can the labels be recovered from the representation?
+
+| Metric | Question |
+|---|---|
+| `knn_accuracy_highdim_mean` | Cross-validated k-NN accuracy on the embedding. |
+| `knn_accuracy_mean` | The same on the 2-D projection — what your figure shows. |
+| `knn_f1_macro` | Every class weighted equally, regardless of size. |
+| `knn_balanced_accuracy` | Mean per-class recall. |
+| `knn_mcc`, `knn_cohen_kappa` | Chance-corrected; stay near 0 for a degenerate predictor. |
+| `knn_auroc` | One-vs-rest, macro-averaged. |
+
+**`retrieval`** — would a nearest-neighbour lookup return true group members?
+
+| Metric | Question |
+|---|---|
+| `precision_at_k` | Of the top *k* hits, how many share the query's family? |
+| `mean_average_precision` | Grades the whole ranking, not just the top. |
+| `r_precision` | Precision at each query's own class size — no arbitrary *k*. |
+| `same_class_auroc` | Does distance alone separate same-family pairs? The remote-homology framing, and insensitive to class imbalance. |
+
+**`clustering`** — is the structure findable without labels at all?
+
+| Metric | Question |
+|---|---|
+| `silhouette`, `silhouette_2d` | Compactness relative to separation, in each space. |
+| `adjusted_rand`, `normalized_mutual_info` | Does k-means at the true group count recover the labels? |
+| `homogeneity` / `completeness` | Are clusters pure? Is each group kept whole? These fail in opposite ways. |
+| `v_measure`, `fowlkes_mallows` | Combined agreement scores. |
+| `davies_bouldin`, `calinski_harabasz` | Geometric quality of the labelled grouping. |
+
+**`confound`** — is the embedding measuring group identity, or something trivial?
+
+| Metric | Question |
+|---|---|
+| `length_only_knn_accuracy` | **The accuracy reachable from sequence length alone.** Read every score above against this. |
+| `length_distance_rho` | How much of the embedding distance is just length difference? |
+| `composition_distance_rho` | How much is recoverable from residue frequencies? |
+
+Four patterns worth knowing:
+
+- **High full-dim k-NN, low 2-D k-NN, low trustworthiness.** The signal is in
+  the embedding and the reducer is destroying it. Believe the embedding, not the
+  figure — and try a different projection. A run over several reducers costs
+  almost nothing, so do that before concluding a method failed.
+- **k-NN barely above the chance baseline.** The representation does not encode
+  group membership, however convincing the scatter plot looks.
+- **High k-NN but low ARI.** Groups are separable but not along the dominant
+  axes of variance. A supervised model will work; unsupervised clustering of
+  unannotated sequences will not.
+- **`length_only_knn_accuracy` close to your best score.** Your groups differ
+  mainly in sequence length, and the embedding is adding little. The CLI prints
+  a warning when this happens, because it is the easiest way to get a
+  good-looking result that means nothing.
+
+`precision_at_k` and `same_class_auroc` translate most directly into practice:
+they are the embedding-space analogue of a BLAST or HMMER hit list, and answer
+"could I annotate an unknown sequence from its neighbours?".
+
+All retrieval and confound metrics build a full pairwise distance matrix, which
+is `O(n²)` in time and memory. That is fine for the hundreds-to-thousands of
+sequences a benchmark uses; narrow `metrics.groups` if you scale past that.
+
+## The projections
+
+Thirteen reducers, and the choice is not cosmetic.
+
+| Reducer | Family | Why you would pick it |
 |---|---|---|
-| `kNN-full` | Are families recoverable from the embedding? | 0–1, vs. chance baseline |
-| `P@k` | Do a protein's nearest neighbours share its family? | 0–1, vs. chance baseline |
-| `Silh` | Are the families geometrically compact and separated? | −1 to 1 |
-| `ARI` | Could families be recovered *without* labels? | ~0 for random, 1 for perfect |
-| `Trust` | Did the projection preserve the real neighbourhoods? | 0–1 |
-| `kNN-2D` | Are families separable in the picture you plotted? | 0–1 |
+| `pca` | linear | Deterministic, and its axes mean something. |
+| `svd` | linear | Latent semantic analysis; consumes sparse k-mer input without densifying. |
+| `nmf` | linear | Parts-based components that read as motifs. Requires non-negative input. |
+| `random_projection` | linear | **The control.** Fits nothing, so whatever structure survives it was robust. |
+| `umap` | manifold | The usual choice for figures; preserves local neighbourhoods. |
+| `tsne` | manifold | Crisp local clusters, arbitrary global distances. |
+| `isomap` | manifold | Geodesic distances; keeps *global* structure. |
+| `mds` | manifold | The most literal picture of the distance matrix. |
+| `spectral` | manifold | Laplacian eigenmaps; separates internally-connected groups. |
+| `lle` | manifold | Local reconstruction weights; no stochastic stage. |
+| `kernel_pca` | manifold | Non-linear but deterministic — between PCA and UMAP. |
+| `phate` | optional `[phate]` | For continua rather than discrete clusters. |
+| `pacmap` | optional `[pacmap]` | Balances near, mid and far pairs; best global geometry. |
 
-Three patterns worth knowing:
+Because a run computes each embedding once and reuses it, adding reducers is
+nearly free — and disagreement between them is itself a result. Start with
+`configs/experiments/reducers.yaml`.
 
-- **`kNN-full` high, `kNN-2D` low, `Trust` low.** The signal is in the
-  embedding and the reducer is destroying it. Believe the embedding, not the
-  figure — and try a different projection.
-- **`kNN-full` barely above the chance baseline.** The representation does not
-  encode family membership, however convincing the scatter plot looks. This is
-  why the baseline is printed on every run.
-- **`kNN-full` high but `ARI` low.** Families are separable but not by the
-  dominant axes of variance. A supervised model will work; unsupervised
-  clustering of unannotated sequences will not.
+Some combinations are invalid: NMF cannot factorise a signed language-model
+embedding, and a manifold method can fail on a disconnected neighbour graph.
+Those pairs are skipped with a reason rather than aborting the run, and every
+omission is named in the output and recorded under `skipped_pairs` in the run
+manifest.
 
-`P@k` is the one that translates most directly into practice: it is the
-embedding-space analogue of a BLAST or HMMER hit list, and it answers "could I
-annotate an unknown sequence from its neighbours?".
+## Non-protein sequences
+
+Set `data.alphabet` to `dna` or `rna` and the alphabet-aware embedders switch
+vocabulary: `dipeptide` becomes 16 dinucleotide frequencies, `onehot` becomes
+four channels per position, and `kmer` picks up motifs directly.
+
+```yaml
+data:
+  alphabet: dna
+  min_seq_length: 100
+```
+
+**Set this correctly.** `A`, `C`, `G`, `T` and `N` are all valid amino acid
+codes, so a nucleotide sequence cleaned against the protein alphabet is not
+rejected — it passes through and silently means nothing. Stating the alphabet is
+the only way to make that failure unreachable.
+
+`physicochemical` and `ctd` are amino acid scales and will refuse to run on a
+nucleotide alphabet rather than return a vector that looks like a result. See
+`configs/experiments/dna.yaml`.
 
 ## What a run produces
 
@@ -268,9 +417,12 @@ starting points:
 |---|---|
 | `quick.yaml` | 2 families, 2 cheap embedders — fast iteration |
 | `full.yaml` | 5 families, includes ESM-2 |
-| `reducers.yaml` | 1 embedder, 3 projections — tests whether the picture is real |
+| `descriptors.yaml` | the four interpretable descriptors head to head |
+| `plm.yaml` | ESM-2 and ProtBERT against the cheap baselines |
+| `reducers.yaml` | 1 embedder, 8 projections — tests whether the picture is real |
 | `llm.yaml` | adds the general-purpose LLM control |
 | `fasta.yaml` | your own sequences instead of Pfam |
+| `dna.yaml` | nucleotide sequences |
 
 The CLI takes only operational flags:
 
@@ -286,30 +438,44 @@ The CLI takes only operational flags:
 
 ```python
 from prot2vec import (
-    ProteinDataset, CompositionEmbedder, KmerEmbedder,
-    PCAReducer, UMAPReducer, RunConfig, run,
+    CompositionEmbedder, CTDEmbedder, DipeptideEmbedder, PCAReducer,
+    ProteinDataset, RunConfig, TruncatedSVDReducer, run,
 )
 
 dataset = ProteinDataset.from_fasta("my_proteins.fasta", label_from="first_token")
 print(dataset.summary())
-# {'n_sequences': 240, 'n_families': 4, 'majority_class_fraction': 0.31, ...}
+# {'n_sequences': 240, 'n_families': 4, 'majority_class_fraction': 0.31,
+#  'alphabet': 'protein', ...}
 
 results = run(RunConfig(
     dataset=dataset,
-    embedders=[CompositionEmbedder(), KmerEmbedder(k=3)],
-    reducers=[PCAReducer(), UMAPReducer(n_neighbors=15)],
+    embedders=[CompositionEmbedder(), DipeptideEmbedder(), CTDEmbedder()],
+    reducers=[PCAReducer(), TruncatedSVDReducer()],
     results_dir="results",
+    # Narrow the panel when you only care about one question.
+    metric_params={"metric_groups": ["classification", "retrieval", "confound"]},
 ))
-print(results[["method", "knn_accuracy_highdim_mean", "precision_at_k"]])
+print(results[["method", "knn_accuracy_highdim_mean", "same_class_auroc",
+               "length_only_knn_accuracy"]])
 ```
 
 Or use a single piece on its own:
 
 ```python
-from prot2vec import ESMEmbedder, retrieval_precision_at_k
+from prot2vec import HuggingFaceEmbedder, same_class_auroc, available_metrics
 
-vectors = ESMEmbedder("esm2_t12_35M").fit_transform(dataset.sequences)
-print(retrieval_precision_at_k(vectors, dataset.labels, k=5))
+vectors = HuggingFaceEmbedder("protbert").fit_transform(dataset.sequences)
+print(same_class_auroc(vectors, dataset.labels))
+print(available_metrics()["retrieval"])   # what else is on offer
+```
+
+Nucleotide sequences work the same way:
+
+```python
+from prot2vec import DipeptideEmbedder, SequenceDataset
+
+dna = SequenceDataset.from_fasta("promoters.fasta", alphabet="dna")
+vectors = DipeptideEmbedder("dna").fit_transform(dna.sequences)  # 16 columns
 ```
 
 Every embedder guarantees **one output row per input sequence, in order**, so
@@ -356,9 +522,20 @@ constructor signature, so any argument you accept becomes part of the cache key
 automatically. Add a unit test in `tests/test_embedders.py`.
 
 **A new reducer** follows the same pattern via `DimReducer` and
-`_build_reducer`. **Heavy or optional dependencies** go behind a pyproject
-extra, imported lazily inside the method that needs them with an `ImportError`
-that names the extra.
+`_build_reducer`, plus a `params` property so the run manifest records what it
+was configured with.
+
+**A new metric** goes in the module for its group under `src/prot2vec/evaluation/`
+and is registered in `suite.py`. Raise `ValueError` when its preconditions are
+unmet and `evaluate()` will skip it with a warning instead of failing the run.
+
+**Alphabet-aware** embedders take an `alphabet` argument and read their token
+set from it, rather than hard-coding the 20 amino acids. Protein-only
+descriptors call `require_protein()` so a nucleotide run is refused rather than
+silently mis-scored.
+
+**Heavy or optional dependencies** go behind a pyproject extra, imported lazily
+inside the method that needs them with an `ImportError` that names the extra.
 
 ## Hardware and cost
 
@@ -402,7 +579,7 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 ```bash
 pip install -e ".[esm,llm,dev]"
 pre-commit install
-pytest                              # 208 tests
+pytest                              # 411 tests
 ruff check src tests
 mypy
 ```

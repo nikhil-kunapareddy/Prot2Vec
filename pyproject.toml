@@ -51,6 +51,17 @@ esm = [
     "fair-esm>=2.0",
     "torch>=2.0",
 ]
+hf = [
+    "sentencepiece>=0.1.99",
+    "torch>=2.0",
+    "transformers>=4.30",
+]
+phate = [
+    "phate>=1.0",
+]
+pacmap = [
+    "pacmap>=0.7",
+]
 llm = [
     "google-genai>=1.0",
     "python-dotenv>=1.0",
@@ -68,6 +79,9 @@ dev = [
 notebooks = [
     "ipykernel",
     "jupyter",
+]
+all = [
+    "prot2vec[esm,hf,llm,pacmap,phate]",
 ]
 
 [project.urls]
@@ -116,7 +130,11 @@ exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
-    "\\.\\.\\.",
+    # An ellipsis on its own line is an abstract-method placeholder. The
+    # anchors matter: a bare `\.\.\.` also matches `tuple[str, ...]` in a type
+    # annotation, and because coverage excludes the whole statement a matching
+    # line belongs to, that silently hid entire function bodies from the report.
+    "^\\s*\\.\\.\\.$",
 ]
 
 [tool.ruff]
@@ -153,6 +171,8 @@ ignore = [
     "N806",
     "TID252",  # the package uses relative imports throughout; mixing in
                # absolute ones only for parent modules would be inconsistent
+    "D400",    # several module summaries are questions ("Is the embedding
+               # measuring what you think it is?"); a forced period reads worse
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -187,11 +207,14 @@ module = [
     "esm.*",
     "google.*",
     "matplotlib.*",
+    "pacmap.*",
+    "phate.*",
     "pandas.*",
     "requests.*",
     "scipy.*",
     "seaborn.*",
     "sklearn.*",
+    "transformers.*",
     "umap.*",
     "yaml.*",
 ]

@@ -7,16 +7,21 @@ authors:
     given-names: Sai Nikhil
 repository-code: "https://github.com/nikhil-kunapareddy/Prot2Vec"
 license: MIT
-version: 0.2.0
+version: 0.3.0
 abstract: >-
-  Prot2Vec benchmarks protein sequence embedding methods on protein family
-  separability. It compares amino acid composition, k-mer TF-IDF, ESM-2 protein
-  language models and general-purpose LLM embedding APIs across PCA, UMAP and
-  t-SNE projections, scoring every pair with family-separability,
-  homology-retrieval, clustering-agreement and projection-trustworthiness
-  metrics against curated Pfam seed alignments or user-supplied FASTA.
+  Prot2Vec benchmarks biological sequence embedding methods on group
+  separability. It compares interpretable descriptors (amino acid composition,
+  dipeptide composition, physicochemical profiles, CTD), corpus-derived
+  representations (k-mer TF-IDF, positional one-hot) and pretrained models
+  (ESM-2, ProtBERT, ProtT5, Ankh, general-purpose LLM embedding APIs) across
+  thirteen dimensionality reduction methods, scoring every pair with
+  thirty-one metrics spanning projection fidelity, classification, retrieval,
+  clustering agreement and confound diagnostics. Protein, DNA and RNA
+  alphabets are supported, with curated Pfam seed alignments or user-supplied
+  FASTA as input.
 keywords:
   - bioinformatics
+  - sequence embeddings
   - proteomics
   - protein embeddings
   - protein language models

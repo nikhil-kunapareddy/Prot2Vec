@@ -5,6 +5,29 @@ shows what a representation encodes along its dominant axes of variance. UMAP
 and t-SNE are non-linear and will happily invent visually crisp clusters from
 noise, which is exactly why Prot2Vec reports ``trustworthiness`` alongside
 every projection: the metric grades how much of the picture you should believe.
+
+Three families are available:
+
+**Linear** — :class:`PCAReducer`, :class:`TruncatedSVDReducer`,
+:class:`NMFReducer`, :class:`RandomProjectionReducer`. Deterministic, cheap,
+and their axes mean something. ``svd`` is the one to reach for with sparse
+k-mer input, since it is latent semantic analysis and needs no densification.
+:class:`RandomProjectionReducer` is deliberately uninformed and belongs in a
+benchmark as a control: whatever structure survives it was robust to begin
+with.
+
+**Manifold** — :class:`UMAPReducer`, :class:`TSNEReducer`,
+:class:`IsomapReducer`, :class:`MDSReducer`, :class:`SpectralReducer`,
+:class:`LLEReducer`, :class:`KernelPCAReducer`. These model curved structure
+and produce the clearest figures, at the cost of stochasticity and
+hyperparameter sensitivity. Run more than one before trusting a shape.
+
+**Optional** — :class:`PHATEReducer` and :class:`PaCMAPReducer`, behind the
+``[phate]`` and ``[pacmap]`` extras.
+
+Because a run computes each embedding once and reuses it, comparing several
+reducers on identical vectors costs almost nothing, and disagreement between
+them is itself a result.
 """
 
 from __future__ import annotations
@@ -270,3 +293,708 @@ class TSNEReducer(DimReducer):
             **self._kwargs,
         )
         return np.asarray(tsne.fit_transform(X))
+
+
+# ---------------------------------------------------------------------------
+# Linear
+# ---------------------------------------------------------------------------
+
+
+class TruncatedSVDReducer(DimReducer):
+    """Truncated SVD, i.e. latent semantic analysis.
+
+    The right linear reducer for sparse input. Unlike :class:`PCAReducer` it
+    never centres the data, so it consumes a k-mer TF-IDF matrix directly
+    instead of densifying 8,000 columns first — the same reason LSA is used on
+    term-document matrices.
+
+    Parameters
+    ----------
+    n_components
+        Components to keep.
+    random_state
+        Seed for the randomised solver.
+    **kwargs
+        Passed to :class:`sklearn.decomposition.TruncatedSVD`.
+    """
+
+    def __init__(self, n_components: int = 2, random_state: int = 0, **kwargs: Any) -> None:
+        self._n_components = n_components
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``svd``."""
+        return "svd"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective SVD settings."""
+        return {
+            "n_components": self._n_components,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Project onto the leading singular vectors, sparse input included."""
+        from sklearn.decomposition import TruncatedSVD
+
+        # TruncatedSVD needs strictly fewer components than features.
+        n_components = min(self._n_components, min(X.shape) - 1)
+        if n_components < 1:
+            return as_dense(X)[:, : self._n_components]
+        svd = TruncatedSVD(
+            n_components=n_components, random_state=self._random_state, **self._kwargs
+        )
+        return np.asarray(svd.fit_transform(X))
+
+
+class NMFReducer(DimReducer):
+    """Non-negative matrix factorisation.
+
+    Constrains both factors to be non-negative, so components add rather than
+    cancel. On k-mer counts that yields parts-based components — groups of
+    k-mers that co-occur — which are easier to read as motifs than the signed
+    mixtures PCA returns.
+
+    Requires non-negative input, which rules out language-model embeddings.
+
+    Parameters
+    ----------
+    n_components
+        Components to learn.
+    random_state
+        Seed for the initialisation.
+    max_iter
+        Coordinate-descent iterations.
+    **kwargs
+        Passed to :class:`sklearn.decomposition.NMF`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        random_state: int = 0,
+        max_iter: int = 500,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._random_state = random_state
+        self._max_iter = max_iter
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``nmf``."""
+        return "nmf"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective NMF settings."""
+        return {
+            "n_components": self._n_components,
+            "random_state": self._random_state,
+            "max_iter": self._max_iter,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Factorise ``X`` into non-negative components.
+
+        Raises
+        ------
+        ValueError
+            If ``X`` contains negative values, naming the likely cause rather
+            than surfacing scikit-learn's generic message.
+        """
+        from sklearn.decomposition import NMF
+
+        minimum = X.min() if is_sparse(X) else float(np.min(as_dense(X)))
+        if float(minimum) < 0.0:
+            raise ValueError(
+                "NMF requires non-negative input, but this embedding contains "
+                f"values as low as {float(minimum):.3f}. Protein language model "
+                "embeddings are signed — use pca, svd or umap for those, and "
+                "keep nmf for counts such as composition, dipeptide, k-mer or "
+                "one-hot."
+            )
+
+        nmf = NMF(
+            n_components=min(self._n_components, min(X.shape)),
+            random_state=self._random_state,
+            max_iter=self._max_iter,
+            **self._kwargs,
+        )
+        return np.asarray(nmf.fit_transform(X))
+
+
+class RandomProjectionReducer(DimReducer):
+    """Gaussian random projection — the control condition.
+
+    Projects onto random directions, using no property of the data at all.
+    Johnson-Lindenstrauss guarantees that pairwise distances are approximately
+    preserved, so this is not noise: it is the amount of structure visible
+    *without* any fitting. Reporting it alongside UMAP is the cleanest way to
+    show that a clustered-looking projection reflects the representation rather
+    than the reducer's appetite for finding clusters.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    random_state
+        Seed for the projection matrix.
+    **kwargs
+        Passed to :class:`sklearn.random_projection.GaussianRandomProjection`.
+    """
+
+    def __init__(self, n_components: int = 2, random_state: int = 0, **kwargs: Any) -> None:
+        self._n_components = n_components
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``random_projection``."""
+        return "random_projection"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective projection settings."""
+        return {
+            "n_components": self._n_components,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Project ``X`` onto random Gaussian directions."""
+        from sklearn.random_projection import GaussianRandomProjection
+
+        projector = GaussianRandomProjection(
+            n_components=min(self._n_components, X.shape[1]),
+            random_state=self._random_state,
+            **self._kwargs,
+        )
+        return np.asarray(projector.fit_transform(X))
+
+
+# ---------------------------------------------------------------------------
+# Manifold
+# ---------------------------------------------------------------------------
+
+
+def _clamp_neighbors(requested: int, n_samples: int, minimum: int = 2) -> int:
+    """Clamp a neighbourhood size to what ``n_samples`` can support.
+
+    Pfam seed alignments routinely hold fewer sequences than the default
+    ``n_neighbors`` of these estimators, which would otherwise raise deep
+    inside scikit-learn on a perfectly reasonable dataset.
+    """
+    return max(minimum, min(requested, n_samples - 1))
+
+
+class KernelPCAReducer(DimReducer):
+    """PCA in an implicit feature space.
+
+    Keeps PCA's determinism while allowing non-linear structure, which puts it
+    between PCA and UMAP: more expressive than a linear projection, far less
+    prone to inventing clusters than a neighbour-graph method. The ``cosine``
+    kernel is the default because embedding magnitude largely tracks sequence
+    length, which is not what family membership is about.
+
+    Parameters
+    ----------
+    n_components
+        Components to keep.
+    kernel
+        ``"cosine"``, ``"rbf"``, ``"poly"``, ``"sigmoid"`` or ``"linear"``.
+    gamma
+        Kernel width for ``rbf``/``poly``/``sigmoid``. ``None`` uses
+        scikit-learn's ``1 / n_features`` default.
+    random_state
+        Seed for the arpack solver.
+    **kwargs
+        Passed to :class:`sklearn.decomposition.KernelPCA`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        kernel: str = "cosine",
+        gamma: float | None = None,
+        random_state: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._kernel = kernel
+        self._gamma = gamma
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier such as ``kernel_pca`` or ``kernel_pca_rbf``."""
+        suffix = "" if self._kernel == "cosine" else f"_{self._kernel}"
+        return f"kernel_pca{suffix}"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective kernel PCA settings."""
+        return {
+            "n_components": self._n_components,
+            "kernel": self._kernel,
+            "gamma": self._gamma,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Project ``X`` onto kernel principal components."""
+        from sklearn.decomposition import KernelPCA
+
+        X_dense = as_dense(X)
+        kpca = KernelPCA(
+            n_components=min(self._n_components, *X_dense.shape),
+            kernel=self._kernel,
+            gamma=self._gamma,
+            random_state=self._random_state,
+            **self._kwargs,
+        )
+        return np.asarray(kpca.fit_transform(X_dense))
+
+
+class IsomapReducer(DimReducer):
+    """Isometric mapping: MDS on geodesic distances.
+
+    Builds a neighbour graph and preserves shortest-path distances through it,
+    so unlike t-SNE and UMAP it tries to keep *global* structure — the relative
+    distances between families, not just the tightness of each one. Worth
+    running when the question is how families relate to each other rather than
+    whether they separate.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    n_neighbors
+        Neighbourhood size for the graph; clamped to the sample count.
+    **kwargs
+        Passed to :class:`sklearn.manifold.Isomap`.
+    """
+
+    def __init__(self, n_components: int = 2, n_neighbors: int = 10, **kwargs: Any) -> None:
+        self._n_components = n_components
+        self._n_neighbors = n_neighbors
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``isomap``."""
+        return "isomap"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective Isomap settings."""
+        return {
+            "n_components": self._n_components,
+            "n_neighbors": self._n_neighbors,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Embed ``X`` by preserving geodesic distances."""
+        from sklearn.manifold import Isomap
+
+        X_dense = as_dense(X)
+        isomap = Isomap(
+            n_components=min(self._n_components, X_dense.shape[1]),
+            n_neighbors=_clamp_neighbors(self._n_neighbors, X_dense.shape[0]),
+            **self._kwargs,
+        )
+        return np.asarray(isomap.fit_transform(X_dense))
+
+
+class MDSReducer(DimReducer):
+    """Multidimensional scaling.
+
+    Places points so that their 2-D distances match their original distances as
+    closely as possible, with no neighbour graph and no perplexity to tune.
+    That makes it the most literal possible picture of the distance matrix, and
+    a useful reference when a neighbour-based method produces something
+    surprising.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    n_init
+        Restarts with different initialisations; the best stress wins.
+    random_state
+        Seed for the initialisations.
+    **kwargs
+        Passed to :class:`sklearn.manifold.MDS`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        n_init: int = 4,
+        random_state: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._n_init = n_init
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``mds``."""
+        return "mds"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective MDS settings."""
+        return {
+            "n_components": self._n_components,
+            "n_init": self._n_init,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Embed ``X`` so that pairwise distances are preserved."""
+        import inspect
+
+        from sklearn.manifold import MDS
+
+        X_dense = as_dense(X)
+        kwargs = dict(self._kwargs)
+        # scikit-learn is changing MDS's `init` default from "random" to
+        # "classical_mds", which would silently move every MDS number in a
+        # published benchmark on upgrade. Pin it where the parameter exists.
+        if "init" not in kwargs and "init" in inspect.signature(MDS).parameters:
+            kwargs["init"] = "random"
+        mds = MDS(
+            n_components=self._n_components,
+            n_init=self._n_init,
+            random_state=self._random_state,
+            **kwargs,
+        )
+        return np.asarray(mds.fit_transform(X_dense))
+
+
+class SpectralReducer(DimReducer):
+    """Laplacian eigenmaps.
+
+    Takes the leading eigenvectors of the neighbour-graph Laplacian, which is
+    the same mathematics that underlies spectral clustering. It therefore tends
+    to separate groups that are connected internally and sparsely linked to
+    each other — exactly the structure protein families have when homology is
+    transitive within a family but not across.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    n_neighbors
+        Neighbourhood size for the affinity graph; clamped to the sample count.
+    random_state
+        Seed for the eigensolver.
+    **kwargs
+        Passed to :class:`sklearn.manifold.SpectralEmbedding`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        n_neighbors: int = 10,
+        random_state: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._n_neighbors = n_neighbors
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``spectral``."""
+        return "spectral"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective spectral embedding settings."""
+        return {
+            "n_components": self._n_components,
+            "n_neighbors": self._n_neighbors,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Embed ``X`` using the graph Laplacian's leading eigenvectors."""
+        from sklearn.manifold import SpectralEmbedding
+
+        X_dense = as_dense(X)
+        spectral = SpectralEmbedding(
+            n_components=min(self._n_components, X_dense.shape[0] - 1),
+            n_neighbors=_clamp_neighbors(self._n_neighbors, X_dense.shape[0]),
+            random_state=self._random_state,
+            **self._kwargs,
+        )
+        return np.asarray(spectral.fit_transform(X_dense))
+
+
+class LLEReducer(DimReducer):
+    """Locally linear embedding.
+
+    Represents every point as a weighted combination of its neighbours and
+    finds the low-dimensional coordinates that keep those weights. Cheaper than
+    Isomap because it never computes all-pairs shortest paths, and unlike UMAP
+    it has no stochastic optimisation stage.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    n_neighbors
+        Neighbourhood size; clamped to exceed ``n_components`` and stay below
+        the sample count, both of which LLE requires.
+    random_state
+        Seed for the eigensolver.
+    **kwargs
+        Passed to :class:`sklearn.manifold.LocallyLinearEmbedding`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        n_neighbors: int = 10,
+        random_state: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._n_neighbors = n_neighbors
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``lle``."""
+        return "lle"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective LLE settings."""
+        return {
+            "n_components": self._n_components,
+            "n_neighbors": self._n_neighbors,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Embed ``X`` by preserving local reconstruction weights."""
+        from sklearn.manifold import LocallyLinearEmbedding
+
+        X_dense = as_dense(X)
+        n_components = min(self._n_components, X_dense.shape[1])
+        # LLE needs n_neighbors > n_components for the weights to be determined.
+        n_neighbors = max(n_components + 1, _clamp_neighbors(self._n_neighbors, X_dense.shape[0]))
+        lle = LocallyLinearEmbedding(
+            n_components=n_components,
+            n_neighbors=min(n_neighbors, X_dense.shape[0] - 1),
+            random_state=self._random_state,
+            **self._kwargs,
+        )
+        return np.asarray(lle.fit_transform(X_dense))
+
+
+# ---------------------------------------------------------------------------
+# Optional third-party
+# ---------------------------------------------------------------------------
+
+
+def _import_optional(module: str, extra: str, reducer: str) -> Any:
+    """Import an optional reducer backend with an actionable error.
+
+    Raises
+    ------
+    ImportError
+        If the module cannot be imported, quoting the underlying error. These
+        packages pull in large numerical stacks, so a broken install is at
+        least as likely as a missing one.
+    """
+    try:
+        return __import__(module)
+    except Exception as exc:
+        raise ImportError(
+            f"Could not import {module}, which {reducer} requires.\n"
+            f"  Underlying error: {type(exc).__name__}: {exc}\n"
+            f'  Install it with: pip install "prot2vec[{extra}]"\n'
+            "  Or choose a built-in reducer: pca, svd, umap, tsne, isomap, "
+            "mds, spectral, lle, kernel_pca, nmf, random_projection."
+        ) from exc
+
+
+class PHATEReducer(DimReducer):
+    """PHATE: potential of heat diffusion for affinity-based transition embedding.
+
+    Designed for data with continuous trajectories rather than discrete
+    clusters, which is why it became standard in single-cell work. That makes
+    it the right choice when the biology is a gradient — a protein family with
+    progressive divergence, or an engineered mutational series — where UMAP
+    tends to shatter a continuum into arbitrary islands.
+
+    Requires the ``[phate]`` extra.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    knn
+        Neighbours used to build the affinity graph.
+    decay
+        Alpha-decay kernel exponent.
+    random_state
+        Seed.
+    **kwargs
+        Passed to :class:`phate.PHATE`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        knn: int = 5,
+        decay: int = 40,
+        random_state: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._knn = knn
+        self._decay = decay
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``phate``."""
+        return "phate"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective PHATE settings."""
+        return {
+            "n_components": self._n_components,
+            "knn": self._knn,
+            "decay": self._decay,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Embed ``X`` with PHATE.
+
+        Raises
+        ------
+        ImportError
+            If the ``[phate]`` extra is not installed.
+        """
+        phate = _import_optional("phate", "phate", "PHATEReducer")
+
+        X_dense = as_dense(X)
+        operator = phate.PHATE(
+            n_components=self._n_components,
+            knn=_clamp_neighbors(self._knn, X_dense.shape[0]),
+            decay=self._decay,
+            random_state=self._random_state,
+            verbose=0,
+            **self._kwargs,
+        )
+        return np.asarray(operator.fit_transform(X_dense))
+
+
+class PaCMAPReducer(DimReducer):
+    """PaCMAP: pairwise controlled manifold approximation.
+
+    Balances near, mid-range and far pairs explicitly, which is its reason for
+    existing: UMAP and t-SNE optimise local neighbourhoods and leave the
+    distance *between* clusters essentially arbitrary. When you want to read
+    "these two families are closer to each other than to the third" off a
+    figure, this preserves global geometry considerably better.
+
+    Requires the ``[pacmap]`` extra.
+
+    Parameters
+    ----------
+    n_components
+        Output dimensionality.
+    n_neighbors
+        Neighbours per point.
+    mn_ratio
+        Mid-near pairs as a fraction of ``n_neighbors``.
+    fp_ratio
+        Further pairs as a fraction of ``n_neighbors``.
+    random_state
+        Seed.
+    **kwargs
+        Passed to :class:`pacmap.PaCMAP`.
+    """
+
+    def __init__(
+        self,
+        n_components: int = 2,
+        n_neighbors: int = 10,
+        mn_ratio: float = 0.5,
+        fp_ratio: float = 2.0,
+        random_state: int = 0,
+        **kwargs: Any,
+    ) -> None:
+        self._n_components = n_components
+        self._n_neighbors = n_neighbors
+        self._mn_ratio = mn_ratio
+        self._fp_ratio = fp_ratio
+        self._random_state = random_state
+        self._kwargs = kwargs
+
+    @property
+    def name(self) -> str:
+        """Identifier: ``pacmap``."""
+        return "pacmap"
+
+    @property
+    def params(self) -> dict[str, Any]:
+        """Effective PaCMAP settings."""
+        return {
+            "n_components": self._n_components,
+            "n_neighbors": self._n_neighbors,
+            "MN_ratio": self._mn_ratio,
+            "FP_ratio": self._fp_ratio,
+            "random_state": self._random_state,
+            **self._kwargs,
+        }
+
+    def fit_transform(self, X: EmbeddingMatrix) -> DenseMatrix:
+        """Embed ``X`` with PaCMAP.
+
+        Raises
+        ------
+        ImportError
+            If the ``[pacmap]`` extra is not installed.
+        """
+        pacmap = _import_optional("pacmap", "pacmap", "PaCMAPReducer")
+
+        X_dense = as_dense(X)
+        operator = pacmap.PaCMAP(
+            n_components=self._n_components,
+            n_neighbors=_clamp_neighbors(self._n_neighbors, X_dense.shape[0]),
+            MN_ratio=self._mn_ratio,
+            FP_ratio=self._fp_ratio,
+            random_state=self._random_state,
+            **self._kwargs,
+        )
+        return np.asarray(operator.fit_transform(X_dense))

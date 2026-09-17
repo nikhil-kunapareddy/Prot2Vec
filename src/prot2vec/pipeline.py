@@ -71,8 +71,9 @@ class RunConfig:
         projections in plain, id-aligned formats for use outside Prot2Vec.
     metric_params
         Extra keyword arguments forwarded to
-        :func:`prot2vec.evaluation.metrics.evaluate`, e.g.
-        ``{"precision_at_k": 10}``.
+        :func:`prot2vec.evaluation.evaluate`, e.g.
+        ``{"metric_groups": ["classification", "retrieval"]}``. The dataset's
+        sequences and alphabet are supplied automatically.
     on_progress
         Optional callback invoked as ``on_progress(event, payload)`` so a CLI
         can render progress without the pipeline depending on the CLI.
@@ -330,6 +331,7 @@ def _write_manifest(
     results: pd.DataFrame,
     elapsed: float,
     results_dir: Path,
+    skipped: list[dict[str, str]] | None = None,
 ) -> Path:
     """Write a JSON record of what was run, with what, and on which versions."""
     manifest = {
@@ -345,6 +347,7 @@ def _write_manifest(
         "metric_params": config.metric_params,
         "dependencies": _dependency_versions(),
         "results": results.to_dict(orient="records"),
+        "skipped_pairs": skipped or [],
     }
     path = results_dir / "run_manifest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -375,12 +378,15 @@ def run(config: RunConfig) -> pd.DataFrame:
     Raises
     ------
     RuntimeError
-        If an embedder returns a row count that does not match the dataset.
+        If an embedder returns a row count that does not match the dataset, or
+        if every pair failed. Individual pair failures are recorded under
+        ``skipped_pairs`` in the run manifest and do not stop the run.
     """
     reducers = config.reducer_list
     results_dir = config.results_dir
     started = time.time()
     records: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
 
     def emit(event: str, **payload: Any) -> None:
         if config.on_progress:
@@ -413,10 +419,49 @@ def run(config: RunConfig) -> pd.DataFrame:
             method = f"{embedder.name}+{reducer.name}"
             emit("reduce_start", name=embedder.name, reducer=reducer.name, method=method)
             logger.info("Reducing %s with %s ...", embedder.name, reducer.name)
-            X_low = reducer.fit_transform(X_high)
+
+            # A matrix run must survive one incompatible cell. NMF rejects
+            # signed input, PHATE may not be installed, a manifold method can
+            # fail on a disconnected neighbour graph -- none of which is a
+            # reason to discard the other pairs that already succeeded.
+            try:
+                X_low = reducer.fit_transform(X_high)
+            except (ImportError, ValueError, RuntimeError, ArithmeticError) as exc:
+                logger.warning("Skipping %s: %s", method, exc)
+                skipped.append({"method": method, "stage": "reduce", "reason": str(exc)})
+                emit(
+                    "pair_skipped",
+                    name=embedder.name,
+                    reducer=reducer.name,
+                    reason=str(exc),
+                    stage="reduce",
+                )
+                continue
             emit("reduce_done", name=embedder.name, reducer=reducer.name)
 
-            metrics = evaluate(X_high_dense, X_low, config.dataset.labels, **config.metric_params)
+            # Sequences and alphabet are supplied so the confound group can
+            # run: "is this embedding just encoding sequence length?" is
+            # unanswerable from the vectors alone.
+            try:
+                metrics = evaluate(
+                    X_high_dense,
+                    X_low,
+                    config.dataset.labels,
+                    sequences=config.dataset.sequences,
+                    alphabet=config.dataset.alphabet,
+                    **config.metric_params,
+                )
+            except (ValueError, RuntimeError, ArithmeticError) as exc:
+                logger.warning("Skipping %s: %s", method, exc)
+                skipped.append({"method": method, "stage": "evaluate", "reason": str(exc)})
+                emit(
+                    "pair_skipped",
+                    name=embedder.name,
+                    reducer=reducer.name,
+                    reason=str(exc),
+                    stage="evaluate",
+                )
+                continue
             records.append(
                 {
                     "embedder": embedder.name,
@@ -442,6 +487,17 @@ def run(config: RunConfig) -> pd.DataFrame:
                     dim_labels=(f"{reducer.name.upper()}-1", f"{reducer.name.upper()}-2"),
                 )
 
+    if not records:
+        details = "; ".join(f"{s['method']}: {s['reason']}" for s in skipped)
+        raise RuntimeError(f"Every (embedder, reducer) pair failed. {details}")
+    if skipped:
+        logger.warning(
+            "%d of %d pairs were skipped: %s",
+            len(skipped),
+            len(records) + len(skipped),
+            ", ".join(s["method"] for s in skipped),
+        )
+
     results_df = pd.DataFrame(records)
 
     metrics_csv = results_dir / "metrics" / "benchmark.csv"
@@ -463,7 +519,9 @@ def run(config: RunConfig) -> pd.DataFrame:
             save_path=results_dir / "figures" / "metrics_summary.png",
         )
 
-    manifest_path = _write_manifest(config, results_df, time.time() - started, results_dir)
+    manifest_path = _write_manifest(
+        config, results_df, time.time() - started, results_dir, skipped=skipped
+    )
     logger.info("Run manifest written to %s", manifest_path)
 
     return results_df

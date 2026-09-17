@@ -100,14 +100,26 @@ class TestTrustworthiness:
         )
         assert shuffled < faithful
 
-    def test_equidistant_points_cannot_be_preserved(self):
-        # Rows of the identity matrix are mutually equidistant, so their
-        # k-neighbourhoods are arbitrary and no 2-D projection can reproduce
-        # them. A low score here is the correct answer, not a bug -- an earlier
-        # version of this test asserted > 0.8 and failed permanently.
+    def test_fully_degenerate_input_is_handled_but_not_meaningful(self):
+        # Rows of the identity matrix are mutually equidistant -- every
+        # pairwise distance is sqrt(2) -- so the k-neighbourhood of each point
+        # is decided entirely by how the sort breaks ties. Projecting to two
+        # dimensions then collapses 18 of the 20 points onto the origin.
+        #
+        # Trustworthiness is therefore *undefined* for this input, not merely
+        # low, and its value tracks the library's tie-breaking rather than
+        # anything about the data: scikit-learn 1.8 returns 0.27 and 1.9
+        # returns 0.95 for exactly this call. Two earlier versions of this test
+        # asserted > 0.8 and < 0.5 respectively, and each passed on one of
+        # those releases and failed on the other.
+        #
+        # So assert only what is mathematically guaranteed: a finite value in
+        # range, and no crash. The meaningful behaviour is covered by the tests
+        # above, which use inputs whose neighbourhoods are well defined.
         X_high = np.eye(20)
         tw = compute_trustworthiness(X_high, X_high[:, :2], n_neighbors=5)
-        assert 0.0 <= tw < 0.5
+        assert np.isfinite(tw)
+        assert 0.0 <= tw <= 1.0
 
     def test_mismatched_rows_raise(self):
         X_high, X_low, _ = _make_data()

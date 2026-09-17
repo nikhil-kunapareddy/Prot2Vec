@@ -183,7 +183,11 @@ ignore = [
 convention = "numpy"
 
 [tool.mypy]
-python_version = "3.11"
+# python_version is deliberately NOT pinned. Pinning it below the interpreter
+# mypy runs on makes modern dependency stubs unparseable -- numpy 2.4 ships
+# stubs using PEP 695 `type` statements, which mypy rejects outright when told
+# to assume 3.11. Ruff's target-version = "py311" covers syntax
+# compatibility, and the test matrix actually runs on 3.11.
 files = ["src/prot2vec"]
 # Strict about our own code...
 disallow_untyped_defs = true
@@ -201,19 +205,25 @@ warn_unused_configs = true
 disallow_any_generics = false
 disallow_untyped_calls = false
 
+# Third-party modules without usable stubs, plus the optional extras that are
+# imported statically. The lint job installs only [dev], so anything behind
+# [esm], [hf] or [llm] is genuinely absent there and must not be an error --
+# those imports are lazy and guarded by an ImportError naming the extra.
+# phate and pacmap are loaded via __import__ so mypy never sees them, and
+# listing them here would only be reported as an unused override.
 [[tool.mypy.overrides]]
 module = [
     "Bio.*",
+    "dotenv.*",
     "esm.*",
     "google.*",
     "matplotlib.*",
-    "pacmap.*",
-    "phate.*",
     "pandas.*",
     "requests.*",
     "scipy.*",
     "seaborn.*",
     "sklearn.*",
+    "torch.*",
     "transformers.*",
     "umap.*",
     "yaml.*",

@@ -257,8 +257,12 @@ class LLMEmbedder(SequenceEmbedder):
         if self.output_dim is not None:
             # Gemini normalises only its full-width output; truncated vectors
             # must be re-normalised before cosine distances mean anything.
+            # The explicit cast back matters: dividing float32 by float64 norms
+            # promotes the result, which would make the returned dtype -- and
+            # so the size of every cached .npy -- depend on whether output_dim
+            # happened to be set.
             norms = np.linalg.norm(result, axis=1, keepdims=True)
-            result = result / np.where(norms == 0, 1.0, norms)
+            result = (result / np.where(norms == 0, 1.0, norms)).astype(np.float32)
         return result
 
     # ------------------------------------------------------------------

@@ -109,6 +109,24 @@ A comment restating the next line is not.
   standard residues, a cached array of the wrong shape.
 - Shared fixtures live in `tests/conftest.py`. `ConstantEmbedder` is a
   dependency-free embedder for pipeline tests.
+- **Do not assert on values that depend on tie-breaking.** A fixture where
+  every pairwise distance is equal — `np.eye(n)`, or repeated identical points
+  — leaves neighbour rankings to the sort order, which is an implementation
+  detail of whatever version of scikit-learn is installed.
+  `compute_trustworthiness(np.eye(20), ...)` returns 0.27 on 1.8 and 0.95 on
+  1.9, and a test asserting either number passes on one release and fails on
+  the other. Assert the guaranteed invariant instead, and test meaning on data
+  whose neighbourhoods are well defined.
+
+CI resolves the newest compatible dependencies, which are often well ahead of a
+long-lived local environment — and their stubs are stricter. To check a change
+against what CI will actually run:
+
+```bash
+python3 -m venv /tmp/civenv
+/tmp/civenv/bin/pip install -e ".[dev]"
+/tmp/civenv/bin/ruff check src tests && /tmp/civenv/bin/mypy && /tmp/civenv/bin/pytest
+```
 
 Markers are available for tests that genuinely need more: `slow`, `network`,
 `esm`, `llm`. Deselect them with `pytest -m "not slow"`.

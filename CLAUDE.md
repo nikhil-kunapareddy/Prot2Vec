@@ -49,6 +49,9 @@ Benchmark harness comparing biological sequence embeddings on group separability
 - **`umap` is broken in some environments** via `umap → parametric_umap → tensorflow → googleapiclient → pyparsing`, which raises `AttributeError`, not `ImportError`. `UMAPReducer` catches broadly on purpose; use `reducer: {name: pca}` or `svd` to work around it.
 - **Don't write an unanchored `...` in coverage `exclude_lines`.** It matches `tuple[str, ...]` in a type annotation, and coverage then excludes that function's entire body — this silently hid `evaluate()` from the report. The pattern is anchored to `^\s*\.\.\.$`.
 - **Don't add a second `_as_dense`.** The dense/sparse conversions live once in `_matrix.py`.
+- **Never assert on a tie-break-dependent value.** Degenerate fixtures (`np.eye(n)`, all-identical points) make every pairwise distance equal, so neighbour rankings come down to the sort's tie-breaking — `compute_trustworthiness(np.eye(20), ...)` returns 0.27 on scikit-learn 1.8 and 0.95 on 1.9. Assert the guaranteed invariant (finite, in range) and test meaning on well-separated data.
+- **The local anaconda env is far behind CI** (numpy 1.24/sklearn 1.8 vs numpy 2.4/sklearn 1.9/pandas 3.0), and its newer stubs catch real errors. Before pushing CI-visible changes, mirror it: `python3 -m venv /tmp/civenv && /tmp/civenv/bin/pip install -e ".[dev]"` then run ruff/mypy/pytest from that venv. `pip install -e .` works there even though it fails under anaconda.
+- **Don't pin `python_version` in the mypy config** below the interpreter mypy runs on: numpy 2.4's stubs use PEP 695 `type` statements and mypy rejects them outright when told to assume 3.11.
 
 ## Preferred patterns
 
